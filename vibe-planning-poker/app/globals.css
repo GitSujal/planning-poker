@@ -1,0 +1,68 @@
+:root {
+  --bg: #0b1220;
+  --fg: #e5e7eb;
+  --card: #111827;
+  --accent: #7c3aed;
+}
+
+:root.light {
+  --bg: #f9fafb;
+  --fg: #111827;
+  --card: #ffffff;
+  --accent: #7c3aed;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+button {
+  cursor: pointer;
+}
+
+.container {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.card {
+  background: var(--card);
+  border-radius: 12px;
+  padding: 1rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+}
+
+input, select, button, textarea {
+  border-radius: 8px;
+  border: 1px solid #374151;
+  background: transparent;
+  color: var(--fg);
+  padding: 0.5rem 0.75rem;
+}
+
+input, select, textarea {
+  width: 100%;
+}
+
+.flex {
+  display: flex;
+  gap: 1rem;
+}
+
+.grid {
+  display: grid;
+  gap: 1rem;
+}
