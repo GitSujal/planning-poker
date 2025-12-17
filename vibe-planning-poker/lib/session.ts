@@ -2,7 +2,7 @@ import { Action, Participant, SessionState, VotingState } from './types';
 
 const initialVotingState: VotingState = { status: 'idle', endsAt: null };
 
-const deckValues = ['0', '1', '2', '3', '5', '8', '13', '20', '40', '100', '?', '☕'];
+const deckValues = ['0', '1', '2', '3', '5', '8', '13', '21', '34', '55', '89', '?', '☕'];
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
@@ -55,7 +55,10 @@ export function applyAction(session: SessionState, action: Action): SessionState
       return next;
     }
     case 'add_task': {
-      if (!requireHost(next, action)) return next;
+      // In open sessions, any participant can add tasks. In closed sessions, only host can.
+      if (next.sessionMode === 'closed' && !requireHost(next, action)) return next;
+      // Verify actor is a participant
+      if (!action.actor || !next.participants[action.actor]) return next;
       const id = `task-${Date.now()}`;
       next.tasks.push({ id, title: action.title, votes: {}, finalEstimate: null });
       if (!next.activeTaskId) next.activeTaskId = id;

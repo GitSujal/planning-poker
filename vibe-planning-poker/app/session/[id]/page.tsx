@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { Action, ParticipantRole, SessionState } from '@/lib/types';
 import { calculateStats, formatDistribution } from '@/lib/session';
+import QRCode from 'qrcode';
 
-const deck = ['0', '1', '2', '3', '5', '8', '13', '20', '40', '100', '?', '☕'];
+const deck = ['0', '1', '2', '3', '5', '8', '13', '21', '34', '55', '89', '?', '☕'];
 
 function getCookie(name: string) {
   if (typeof document === 'undefined') return null;
@@ -31,6 +32,8 @@ export default function SessionPage() {
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [duration, setDuration] = useState(120);
   const [theme, setTheme] = useState('dark');
+  const [showQR, setShowQR] = useState(false);
+  const qrCanvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
     const stored = localStorage.getItem('displayName');
@@ -52,6 +55,15 @@ export default function SessionPage() {
     }
   }, [session, displayName]);
 
+  useEffect(() => {
+    if (showQR && qrCanvasRef.current && sessionId) {
+      const joinUrl = `${window.location.origin}/session/${sessionId}`;
+      QRCode.toCanvas(qrCanvasRef.current, joinUrl, { width: 200 }, (error) => {
+        if (error) console.error('QR generation error:', error);
+      });
+    }
+  }, [showQR, sessionId]);
+
   const fetchSession = async () => {
     if (!sessionId) return;
     try {
@@ -70,6 +82,7 @@ export default function SessionPage() {
     fetchSession();
     const interval = setInterval(fetchSession, 2500);
     return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId]);
 
   const sendAction = async (action: Action) => {
@@ -107,7 +120,7 @@ export default function SessionPage() {
   const votingEndsIn = useMemo(() => {
     if (!session?.voting.endsAt) return null;
     return Math.max(0, session.voting.endsAt - Math.floor(Date.now() / 1000));
-  }, [session?.voting.endsAt, session?.updatedAt]);
+  }, [session?.voting.endsAt]);
 
   const voteValue =
     session && displayName ? session.tasks.find((t) => t.id === session.activeTaskId)?.votes?.[displayName] : undefined;
@@ -123,7 +136,7 @@ export default function SessionPage() {
     session.tasks.forEach((task) => {
       const stats = calculateStats(task.votes);
       const dist = JSON.stringify(formatDistribution(task.votes));
-      rows.push([task.title, task.finalEstimate ?? '', stats.average ?? '', stats.median ?? '', dist]);
+      rows.push([task.title, task.finalEstimate ?? '', String(stats.average ?? ''), String(stats.median ?? ''), dist]);
     });
     const csv = rows.map((r) => r.map((x) => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -149,6 +162,11 @@ export default function SessionPage() {
         <div>
           <h2>Session {session.sessionId}</h2>
           <p style={{ opacity: 0.7 }}>Host: {session.host.name}</p>
+          {isHost && (
+            <button onClick={() => setShowQR(!showQR)} style={{ fontSize: '0.9rem', marginTop: '0.5rem' }}>
+              {showQR ? 'Hide' : 'Show'} QR Code
+            </button>
+          )}
         </div>
         <div className="flex" style={{ alignItems: 'center', gap: '0.5rem' }}>
           <button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>Theme</button>
@@ -156,6 +174,16 @@ export default function SessionPage() {
           <button onClick={() => router.push('/')}>Home</button>
         </div>
       </header>
+
+      {showQR && isHost && (
+        <div className="card" style={{ maxWidth: 320, margin: '1rem 0', textAlign: 'center' }}>
+          <h3>Join this session</h3>
+          <canvas ref={qrCanvasRef} style={{ margin: '0 auto', display: 'block' }} />
+          <p style={{ marginTop: '0.5rem', fontSize: '0.9rem', wordBreak: 'break-all' }}>
+            {`${window.location.origin}/session/${sessionId}`}
+          </p>
+        </div>
+      )}
 
       {!hasJoined && !pendingApproval && (
         <div className="card" style={{ maxWidth: 520 }}>
@@ -184,7 +212,7 @@ export default function SessionPage() {
           <section className="card">
             <div className="flex" style={{ justifyContent: 'space-between' }}>
               <h3>Tasks</h3>
-              {isHost && (
+              {(isHost || session.sessionMode === 'open') && (
                 <button
                   onClick={() => {
                     if (newTaskTitle.trim()) {
@@ -197,11 +225,13 @@ export default function SessionPage() {
                 </button>
               )}
             </div>
-            <input
-              placeholder="New task title"
-              value={newTaskTitle}
-              onChange={(e) => setNewTaskTitle(e.target.value)}
-            />
+            {(isHost || session.sessionMode === 'open') && (
+              <input
+                placeholder="New task title"
+                value={newTaskTitle}
+                onChange={(e) => setNewTaskTitle(e.target.value)}
+              />
+            )}
             <ul>
               {session.tasks.map((task) => (
                 <li key={task.id} style={{ margin: '0.5rem 0' }}>
