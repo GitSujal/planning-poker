@@ -175,7 +175,7 @@ export default function SessionPage() {
         </div>
       </header>
 
-      {showQR && isHost && (
+      {showQR && isHost && typeof window !== 'undefined' && (
         <div className="card" style={{ maxWidth: 320, margin: '1rem 0', textAlign: 'center' }}>
           <h3>Join this session</h3>
           <canvas ref={qrCanvasRef} style={{ margin: '0 auto', display: 'block' }} />
