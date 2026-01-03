@@ -3,8 +3,8 @@ import { applyAction } from '@/lib/session';
 import { getSession, putSession } from '@/lib/r2';
 import { Action } from '@/lib/types';
 
+// Note: 'add_task' is not in this list because it can be done by any participant in open sessions
 const hostActions: Action['type'][] = [
-  'add_task',
   'select_task',
   'start_voting',
   'close_voting',
