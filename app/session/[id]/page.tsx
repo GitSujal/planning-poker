@@ -2,19 +2,16 @@
 
 import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { Action, ParticipantRole, SessionState } from '@/lib/types';
 import { calculateStats, formatDistribution } from '@/lib/session';
 import { getHostToken, setHostToken } from '@/lib/cookies';
 import { storage } from '@/lib/storage';
 import QRCode from 'qrcode';
-import { VotingGrid } from '@/components/voting/VotingGrid';
-import { TaskDialog } from '@/components/session/TaskDialog';
-import { SessionQR } from '@/components/shared/SessionQR';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
+import { ThemeToggle } from '@/components/ThemeToggle';
+// Removed component imports that we will replace/inline or are not needed for new UI
+// Keeping purely functional imports
 import { useSocket } from '@/lib/useSocket';
-import { ErrorBoundary } from '@/components/ErrorBoundary';
 
 const deck = ['0', '1', '2', '3', '5', '8', '13', '21', '34', '55', '89', '?', '☕'];
 
@@ -23,10 +20,7 @@ function saveIdentity(name: string, role: ParticipantRole) {
   storage.setItem('role', role);
 }
 
-type Tab = 'tasks' | 'people' | 'settings';
-type MobileView = 'stage' | 'tabs';
-
-function SessionPageContent() {
+export default function SessionPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
   const sessionId = params?.id;
@@ -41,31 +35,27 @@ function SessionPageContent() {
   const [joinError, setJoinError] = useState('');
 
   // UI State
-  const [activeTab, setActiveTab] = useState<Tab>('tasks');
-  const [mobileView, setMobileView] = useState<MobileView>('stage');
-  const [duration, setDuration] = useState(120);
-  const [theme, setTheme] = useState('dark');
+  const [localVote, setLocalVote] = useState<string | null>(null);
   const [showQR, setShowQR] = useState(false);
-  const qrCanvasRef = useRef<HTMLCanvasElement>(null);
+  const [qrCodeUrl, setQrCodeUrl] = useState('');
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // For mobile if needed
+  const [pendingTasksLoaded, setPendingTasksLoaded] = useState(false);
+  const [isAddingTask, setIsAddingTask] = useState(false);
+  const [newTaskTitle, setNewTaskTitle] = useState('');
+  const [newTaskDescription, setNewTaskDescription] = useState('');
+  const [showTaskModal, setShowTaskModal] = useState(false);
+  const [expandedDescription, setExpandedDescription] = useState(false);
 
   // Optimistic update timeout ref
   const optimisticTimeoutRef = useRef<NodeJS.Timeout>();
 
   // Load saved identity
   useEffect(() => {
-    const stored = storage.getItem('displayName');
+    const storedName = storage.getItem('displayName');
     const storedRole = (storage.getItem('role') as ParticipantRole) || 'voter';
-    const storedTheme = storage.getItem('theme');
-    if (stored) setDisplayName(stored);
+    if (storedName) setDisplayName(storedName);
     if (storedRole) setRole(storedRole);
-    if (storedTheme) setTheme(storedTheme);
   }, []);
-
-  // Theme management
-  useEffect(() => {
-    document.documentElement.classList.toggle('light', theme === 'light');
-    storage.setItem('theme', theme);
-  }, [theme]);
 
   // Host token persistence
   useEffect(() => {
@@ -74,77 +64,50 @@ function SessionPageContent() {
     }
   }, [session, displayName]);
 
-  // QR Code generation
-  useEffect(() => {
-    if (showQR && qrCanvasRef.current && sessionId) {
-      const joinUrl = `${window.location.origin}/session/${sessionId}`;
-      QRCode.toCanvas(qrCanvasRef.current, joinUrl, { width: 220, margin: 2 }, (error) => {
-        if (error) console.error('QR error:', error);
-      });
-    }
-  }, [showQR, sessionId]);
-
-  // WebSocket connection with improved error handling
+  // WebSocket connection
   const { isConnected, isConnecting, send, error: wsError } = useSocket<SessionState>(
     sessionId as string,
-    useCallback((data) => {
+    useCallback((data: SessionState | null) => {
+      console.log('[WebSocket] Received data:', data);
       if (data && typeof data === 'object' && 'sessionId' in data) {
+        console.log('[WebSocket] Updating session state, voting status:', data.voting?.status);
         setSession(data);
-        setOptimisticSession(null); // Clear optimistic state when real update arrives
+        setOptimisticSession(null);
         setLoading(false);
         setError('');
+      } else {
+        console.warn('[WebSocket] Received invalid data:', data);
       }
     }, [])
   );
 
-  // Display offline/error status
   useEffect(() => {
-    if (wsError) {
-      setError(wsError);
-    }
+    if (wsError) setError(wsError);
   }, [wsError]);
 
-  // Clear optimistic updates if they take too long (fallback)
-  useEffect(() => {
-    if (optimisticSession) {
-      optimisticTimeoutRef.current = setTimeout(() => {
-        console.warn('Optimistic update timeout, clearing');
-        setOptimisticSession(null);
-      }, 5000);
-    }
-
-    return () => {
-      if (optimisticTimeoutRef.current) {
-        clearTimeout(optimisticTimeoutRef.current);
-      }
-    };
-  }, [optimisticSession]);
-
-  // Optimistic update helper
+  // Optimistic updates
   const applyOptimisticUpdate = useCallback((updater: (s: SessionState) => SessionState) => {
     setSession(current => {
       if (!current) return current;
       const updated = updater(current);
       setOptimisticSession(updated);
-      return current; // Keep original until server confirms
+      return current;
     });
   }, []);
 
-  // Send action with optimistic updates
   const sendAction = useCallback(async (action: Action, optimisticUpdater?: (s: SessionState) => SessionState) => {
+    console.log('[sendAction] Called with action:', action, 'isConnected:', isConnected);
     if (!isConnected) {
       setJoinError('Disconnected from server. Reconnecting...');
+      console.warn('[sendAction] Not connected, aborting');
       return;
     }
-
     const hostToken = getHostToken();
     const payload = { ...action, actor: displayName, hostToken: hostToken || undefined };
-
-    // Apply optimistic update if provided
+    console.log('[sendAction] Sending payload:', payload);
     if (optimisticUpdater && session) {
       applyOptimisticUpdate(optimisticUpdater);
     }
-
     send(payload);
   }, [isConnected, displayName, send, session, applyOptimisticUpdate]);
 
@@ -158,683 +121,1010 @@ function SessionPageContent() {
     }
   };
 
-  const exportCsv = () => {
-    if (!session) return;
-    const rows = [['Task Title', 'Final Estimate', 'Average', 'Median', 'Vote Distribution']];
-    session.tasks.forEach((task) => {
-      const stats = calculateStats(task.votes);
-      const dist = JSON.stringify(formatDistribution(task.votes));
-      rows.push([
-        task.title,
-        task.finalEstimate ?? '',
-        String(stats.average ?? ''),
-        String(stats.median ?? ''),
-        dist
-      ]);
-    });
-    const csv = rows.map((r) => r.map((x) => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `vibeplanningpoker_${session.sessionId}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
-  };
-
-  // Derived state - use optimistic session if available
+  // Derived state
   const displaySession = optimisticSession || session;
   const isHost = displaySession && getHostToken() === displaySession.host.hostToken;
   const activeTask = displaySession?.tasks.find((t) => t.id === displaySession.activeTaskId) || null;
   const hasJoined = displaySession && !!displaySession.participants[displayName];
   const pendingApproval = displaySession && !!displaySession.joinRequests[displayName];
 
-  const votingEndsIn = useMemo(() => {
-    if (!displaySession?.voting.endsAt) return null;
-    return Math.max(0, displaySession.voting.endsAt - Math.floor(Date.now() / 1000));
-  }, [displaySession?.voting.endsAt]);
+  // Vote value logic
+  const myVote = displaySession && displayName
+    ? displaySession.tasks.find(t => t.id === displaySession.activeTaskId)?.votes?.[displayName]
+    : null;
 
-  const voteValue = displaySession && displayName
-    ? displaySession.tasks.find((t) => t.id === displaySession.activeTaskId)?.votes?.[displayName]
-    : undefined;
+  // Load pending tasks from Create Session and add them
+  useEffect(() => {
+    if (!sessionId || !isHost || !isConnected || pendingTasksLoaded) return;
 
+    const pendingTasksKey = `pendingTasks_${sessionId}`;
+    const pendingTasksJson = localStorage.getItem(pendingTasksKey);
+
+    if (pendingTasksJson) {
+      try {
+        const pendingTasks = JSON.parse(pendingTasksJson);
+        if (Array.isArray(pendingTasks) && pendingTasks.length > 0) {
+          // Add each task to the session
+          pendingTasks.forEach((task: { title: string; description?: string }) => {
+            sendAction({ type: 'add_task', title: task.title });
+          });
+          // Clear the pending tasks
+          localStorage.removeItem(pendingTasksKey);
+          setPendingTasksLoaded(true);
+        }
+      } catch (e) {
+        console.error('Failed to load pending tasks:', e);
+      }
+    }
+  }, [sessionId, isHost, isConnected, pendingTasksLoaded, sendAction]);
+
+  // Deck of voting options with confirmed vote
+  useEffect(() => {
+    if (myVote) setLocalVote(myVote);
+  }, [myVote]);
+
+  // Generate QR code for session join link
+  useEffect(() => {
+    if (typeof window !== 'undefined' && sessionId) {
+      const joinUrl = `${window.location.origin}/session/${sessionId}`;
+      QRCode.toDataURL(joinUrl, { width: 200, margin: 2 })
+        .then(setQrCodeUrl)
+        .catch(console.error);
+    }
+  }, [sessionId]);
+
+  // Stats
   const activeStats = useMemo(() => {
-    if (!activeTask) return { average: null as number | null, median: null as number | null };
+    if (!activeTask) return { average: null, median: null };
     return calculateStats(activeTask.votes);
   }, [activeTask]);
 
-  // Connection status indicator
-  const ConnectionStatus = () => {
-    if (isConnecting) {
-      return (
-        <div className="fixed top-4 right-4 z-50 px-3 py-2 bg-yellow-500/20 border border-yellow-500/30 rounded-lg text-yellow-400 text-sm flex items-center gap-2">
-          <div className="w-2 h-2 bg-yellow-400 rounded-full animate-pulse"></div>
-          Connecting...
-        </div>
-      );
+  const participantsList = useMemo(() => {
+    if (!displaySession) return [];
+    return Object.entries(displaySession.participants).map(([name, p]) => ({
+      name,
+      role: p.role,
+      hasVoted: activeTask?.votes[name] !== undefined,
+      isHost: session?.host.name === name
+    }));
+  }, [displaySession, activeTask, session]);
+
+  const votedCount = participantsList.filter(p => p.hasVoted).length;
+  const totalVoters = participantsList.filter(p => p.role === 'voter').length;
+
+  // Check if this is the final task
+  const isLastTask = useMemo(() => {
+    if (!displaySession) return false;
+    const unestimatedTasks = displaySession.tasks.filter(t => !t.finalEstimate && t.id !== displaySession.activeTaskId);
+    return unestimatedTasks.length === 0;
+  }, [displaySession]);
+
+  // Helper function to move to next task
+  const moveToNextTask = useCallback(() => {
+    if (!displaySession) return;
+
+    // Find next task without final estimate
+    const nextTask = displaySession.tasks.find(t => !t.finalEstimate && t.id !== displaySession.activeTaskId);
+
+    if (nextTask) {
+      sendAction({ type: 'select_task', taskId: nextTask.id });
+    } else {
+      // All tasks are done, open modal to add a new one
+      setShowTaskModal(true);
     }
+  }, [displaySession, sendAction]);
 
-    if (!isConnected) {
-      return (
-        <div className="fixed top-4 right-4 z-50 px-3 py-2 bg-red-500/20 border border-red-500/30 rounded-lg text-red-400 text-sm flex items-center gap-2">
-          <div className="w-2 h-2 bg-red-400 rounded-full"></div>
-          Disconnected - Reconnecting...
-        </div>
-      );
+  // Helper function to add task
+  const handleAddTask = useCallback(() => {
+    if (newTaskTitle.trim()) {
+      sendAction({
+        type: 'add_task',
+        title: newTaskTitle.trim(),
+        description: newTaskDescription.trim() || undefined
+      });
+      setNewTaskTitle('');
+      setNewTaskDescription('');
+      setShowTaskModal(false);
+      setIsAddingTask(false);
     }
+  }, [newTaskTitle, newTaskDescription, sendAction]);
 
-    return null;
-  };
+  // Helper function to export data as CSV
+  const exportToCSV = useCallback(() => {
+    if (!displaySession) return;
 
-  // Render helpers
+    const csvRows = [];
+    csvRows.push(['Task Title', 'Description', 'Final Estimate', 'Average Vote', 'Median Vote'].join(','));
+
+    displaySession.tasks.forEach(task => {
+      const stats = calculateStats(task.votes);
+      const row = [
+        `"${task.title.replace(/"/g, '""')}"`,
+        `"${(task.description || '').replace(/"/g, '""')}"`,
+        task.finalEstimate || '',
+        stats.average || '',
+        stats.median || ''
+      ].join(',');
+      csvRows.push(row);
+    });
+
+    const csvContent = csvRows.join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `planning-poker-${sessionId}-${new Date().toISOString().split('T')[0]}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+  }, [displaySession, sessionId]);
+
+  // View Switching Logic
+  const viewState = useMemo(() => {
+    if (!displaySession) return 'loading';
+    if (displaySession.status === 'ended') return 'summary';
+    if (displaySession.voting.status === 'revealed') return 'results';
+    return 'dashboard';
+  }, [displaySession]);
+
+  // --- RENDER HELPERS ---
+
   if (loading && !displaySession) {
     return (
-      <div className="flex-center min-h-screen bg-[var(--bg-app)]">
+      <div className="flex h-screen w-full items-center justify-center bg-background-light dark:bg-background-dark">
+        <div className="flex flex-col items-center gap-4">
+          <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+          <p className="text-text-sub-light dark:text-text-sub-dark">Loading Session...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error && !displaySession) { // Connection error
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-background-light dark:bg-background-dark p-4">
         <div className="text-center">
-          <div className="w-16 h-16 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-muted">Loading Session...</p>
+          <h1 className="text-xl font-bold text-red-500 mb-2">Connection Error</h1>
+          <p className="text-text-sub-light mb-4">{error}</p>
+          <button onClick={() => window.location.reload()} className="px-4 py-2 bg-primary text-white rounded-lg">Retry</button>
         </div>
       </div>
     );
   }
 
-  if (error && !displaySession) {
+  // Join Screen
+  if (!hasJoined && !pendingApproval) {
     return (
-      <div className="flex-center min-h-screen p-6 bg-[var(--bg-app)]">
-        <div className="card max-w-md w-full text-center">
-          <div className="text-6xl mb-4">⚠️</div>
-          <h1 className="text-2xl font-bold mb-4">Connection Error</h1>
-          <p className="text-muted mb-6">{error}</p>
-          <button onClick={() => window.location.reload()} className="btn btn-primary w-full">
-            Retry
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (!displaySession) {
-    return (
-      <div className="flex-center min-h-screen bg-[var(--bg-app)]">
-        <div className="card max-w-md w-full text-center">
-          <div className="text-6xl mb-4">🔍</div>
-          <h1 className="text-2xl font-bold mb-4">Session not found</h1>
-          <p className="text-muted mb-6">The session you're looking for doesn't exist or has expired.</p>
-          <button onClick={() => router.push('/')} className="btn btn-primary w-full">
-            Go Home
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (displaySession.status === 'ended') {
-    return (
-      <div className="flex-center min-h-screen bg-[var(--bg-app)]">
-        <div className="card max-w-md w-full text-center">
-          <div className="text-6xl mb-4">👋</div>
-          <h1 className="text-2xl font-bold mb-4">Session Ended</h1>
-          <p className="text-muted mb-6">This planning poker session has been ended by the host.</p>
-          <button onClick={() => router.push('/')} className="btn btn-primary w-full">
-            Go Home
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  const renderJoinScreen = () => (
-    <div className="flex-center min-h-screen p-4 bg-[var(--bg-app)]">
-      <div className="card w-full max-w-md animate-fade-in shadow-xl">
-        <h2 className="text-2xl font-bold mb-4 text-center">Join Session</h2>
-        <div className="flex flex-col gap-4">
-          <div>
-            <label>Display Name</label>
-            <input
-              className="input"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              placeholder="e.g. Alice"
-              autoFocus
-              maxLength={50}
-            />
+      <div className="bg-background-light dark:bg-background-dark min-h-screen flex flex-col font-display text-text-main-light dark:text-text-main-dark">
+        <header className="flex items-center justify-between border-b border-border-light dark:border-border-dark px-6 py-3 bg-surface-light dark:bg-surface-dark">
+          <div className="flex items-center gap-3">
+            <Link href="/" className="size-8 text-primary flex items-center justify-center rounded-lg bg-primary/10">
+              <span className="material-symbols-outlined text-2xl">style</span>
+            </Link>
+            <h2 className="text-lg font-bold">Planning Poker</h2>
           </div>
-          <div>
-            <label>Role</label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                className={`btn ${role === 'voter' ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => setRole('voter')}
-              >
-                Voter
-              </button>
-              <button
-                className={`btn ${role === 'observer' ? 'btn-primary' : 'btn-secondary'}`}
-                onClick={() => setRole('observer')}
-              >
-                Observer
-              </button>
+        </header>
+        <main className="flex-1 flex flex-col items-center justify-center p-4">
+          <div className="w-full max-w-[520px] bg-surface-light dark:bg-surface-dark rounded-xl shadow-sm border border-border-light dark:border-border-dark p-8 flex flex-col gap-6">
+            <h1 className="text-2xl font-bold text-center">Join Session</h1>
+            <div className="flex flex-col gap-2">
+              <label className="text-sm font-semibold">Your Name</label>
+              <input
+                className="w-full h-12 rounded-lg border border-border-light dark:border-border-dark bg-background-light dark:bg-background-dark px-4"
+                value={displayName}
+                onChange={(e) => setDisplayName(e.target.value)}
+                placeholder="Enter your name"
+                autoFocus
+              />
             </div>
+            {joinError && <div className="text-red-500 text-sm bg-red-50 dark:bg-red-900/20 p-2 rounded">{joinError}</div>}
+            <button
+              onClick={joinSession}
+              disabled={!displayName || !isConnected}
+              className="w-full h-12 bg-primary text-white font-bold rounded-lg hover:bg-primary-hover disabled:opacity-50 transition-colors"
+            >
+              {isConnected ? 'Join Session' : 'Connecting...'}
+            </button>
+            <p className="text-center text-xs text-text-sub-light">Session ID: {sessionId}</p>
           </div>
-          {joinError && (
-            <div className="text-sm p-2 bg-red-500/10 text-red-400 rounded border border-red-500/20">
-              {joinError}
-            </div>
-          )}
-          <button
-            disabled={!displayName || !isConnected}
-            onClick={joinSession}
-            className="btn btn-primary w-full py-3 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {isConnected ? 'Enter Room' : 'Connecting...'}
-          </button>
-        </div>
+        </main>
       </div>
-    </div>
-  );
-
-  if (!hasJoined && !pendingApproval) return renderJoinScreen();
+    );
+  }
 
   if (pendingApproval) {
     return (
-      <div className="flex-center min-h-screen bg-[var(--bg-app)]">
-        <div className="card max-w-md w-full text-center">
-          <div className="w-16 h-16 bg-primary/20 rounded-full flex-center mx-auto mb-4">
-            <div className="w-8 h-8 border-4 border-primary border-t-transparent rounded-full animate-spin"></div>
-          </div>
-          <h2 className="text-2xl font-bold mb-2">Waiting for Approval</h2>
-          <p className="text-muted">The host will approve your request to join shortly.</p>
+      <div className="flex h-screen items-center justify-center bg-background-light dark:bg-background-dark">
+        <div className="text-center p-8">
+          <div className="w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+          <h2 className="text-xl font-bold mb-2 text-text-main-light dark:text-text-main-dark">Waiting for Approval</h2>
+          <p className="text-text-sub-light dark:text-text-sub-dark">The host will let you in shortly.</p>
         </div>
       </div>
     );
   }
 
-  // Main UI components
-  const renderSidebarContent = () => (
-    <>
-      <div className="h-16 flex items-center px-4 border-b border-[var(--border-color)] shrink-0">
-        <span className="font-bold text-lg bg-gradient-to-r from-violet-400 to-fuchsia-400 bg-clip-text text-transparent">
-          VibePoker
-        </span>
-        <span className="mx-2 text-[var(--border-color)]">|</span>
-        <span className="text-sm text-muted font-mono">#{sessionId}</span>
-      </div>
+  // --- VIEWS ---
 
-      <div className="flex border-b border-border shrink-0">
-        {(['tasks', 'people', 'settings'] as Tab[]).map((tab) => (
-          <button
-            key={tab}
-            onClick={() => setActiveTab(tab)}
-            className={`flex-1 py-3 text-sm font-medium border-b-2 transition-colors capitalize ${
-              activeTab === tab
-                ? 'border-primary text-primary'
-                : 'border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/50'
-            }`}
-          >
-            {tab === 'tasks' && '📋'} {tab === 'people' && '👥'} {tab === 'settings' && '⚙️'} {tab}
-          </button>
-        ))}
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-4 content-area">
-        {activeTab === 'tasks' && (
-          <div className="space-y-3 animate-fade-in">
-            <div className="flex items-center justify-between mb-2">
-              <h2 className="text-xs uppercase tracking-wider text-muted font-bold">
-                Queue ({displaySession?.tasks.length})
-              </h2>
+  // REVEALED VIEW (Results)
+  if (viewState === 'results') {
+    return (
+      <div className="bg-background-light dark:bg-background-dark font-display antialiased min-h-screen flex flex-col">
+        <header className="h-16 flex items-center justify-between px-6 bg-surface-light dark:bg-surface-dark border-b border-border-light dark:border-border-dark z-20 shrink-0">
+          <div className="flex items-center gap-4">
+            <Link href="/" className="size-8 bg-primary rounded-lg flex items-center justify-center text-white">
+              <span className="material-symbols-outlined text-[20px]">style</span>
+            </Link>
+            <div className="flex flex-col">
+              <h1 className="text-base font-bold leading-none">Planning Poker</h1>
+              <span className="text-xs text-text-sub-light dark:text-text-sub-dark font-medium mt-1">Session #{sessionId}</span>
             </div>
-            {displaySession?.tasks.length === 0 && (
-              <p className="text-muted italic text-center py-4 text-sm">No tasks yet.</p>
+          </div>
+          <div className="flex items-center gap-6">
+            <span className="px-3 py-1 rounded-full bg-green-500/10 text-green-600 dark:text-green-400 text-sm font-medium border border-green-500/20">Voting Complete</span>
+            <div className="h-8 w-px bg-border-light dark:bg-border-dark"></div>
+            <div className="flex items-center gap-3">
+              <ThemeToggle />
+              <div className="flex items-center gap-2">
+                <div className="size-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xs uppercase border border-primary/20">
+                  {displayName.substring(0, 2)}
+                </div>
+                <span className="text-sm font-medium hidden sm:block">{displayName}</span>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <div className="flex flex-1 overflow-hidden">
+          {/* Sidebar */}
+          <aside className="w-80 bg-surface-light dark:bg-surface-dark border-r border-border-light dark:border-border-dark flex flex-col shrink-0 z-10 hidden md:flex">
+            {/* QR Code Section (Host only) */}
+            {isHost && (
+              <div className="p-4 border-b border-border-light dark:border-border-dark">
+                <button
+                  onClick={() => setShowQR(!showQR)}
+                  className="w-full flex items-center justify-between text-left group"
+                >
+                  <h3 className="font-semibold text-sm uppercase tracking-wider text-text-sub-light dark:text-text-sub-dark group-hover:text-primary transition-colors">
+                    Invite Participants
+                  </h3>
+                  <span className="material-symbols-outlined text-text-sub-light group-hover:text-primary transition-all" style={{ transform: showQR ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+                    expand_more
+                  </span>
+                </button>
+                {showQR && (
+                  <div className="mt-4 flex flex-col gap-3 animate-fade-in">
+                    {qrCodeUrl && (
+                      <div className="flex justify-center p-3 bg-white rounded-lg">
+                        <img src={qrCodeUrl} alt="Session QR Code" className="w-40 h-40" />
+                      </div>
+                    )}
+                    <div className="flex flex-col gap-2">
+                      <label className="text-xs font-semibold text-text-sub-light dark:text-text-sub-dark uppercase">Join Link</label>
+                      <div className="flex gap-2">
+                        <input
+                          type="text"
+                          value={typeof window !== 'undefined' ? `${window.location.origin}/session/${sessionId}` : ''}
+                          readOnly
+                          className="flex-1 px-3 py-2 text-xs rounded-lg border border-border-light dark:border-border-dark bg-background-light dark:bg-background-dark font-mono"
+                        />
+                        <button
+                          onClick={() => {
+                            if (typeof window !== 'undefined') {
+                              navigator.clipboard.writeText(`${window.location.origin}/session/${sessionId}`);
+                            }
+                          }}
+                          className="px-3 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors"
+                          title="Copy link"
+                        >
+                          <span className="material-symbols-outlined text-[18px]">content_copy</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
             )}
-            {displaySession?.tasks.map((task) => (
+            <div className="p-4 border-b border-border-light dark:border-border-dark flex justify-between items-center">
+              <h2 className="font-semibold text-sm uppercase tracking-wider text-text-sub-light dark:text-text-sub-dark">Backlog</h2>
+            </div>
+            <div className="flex-1 overflow-y-auto p-3 space-y-2">
+              {displaySession?.tasks.map(task => (
+                <div
+                  key={task.id}
+                  onClick={() => isHost && sendAction({ type: 'select_task', taskId: task.id })}
+                  className={`group relative flex flex-col p-4 rounded-xl shadow-sm cursor-pointer transition-all border ${task.id === displaySession.activeTaskId
+                    ? 'bg-surface-light dark:bg-surface-dark border-l-4 border-l-primary ring-1 ring-border-light dark:ring-border-dark'
+                    : 'hover:bg-background-light dark:hover:bg-background-dark/50 border-transparent opacity-70 hover:opacity-100'
+                    }`}
+                >
+                  <div className="flex items-start gap-3">
+                    {task.finalEstimate ? (
+                      <span className="material-symbols-outlined text-green-500 text-[20px] mt-0.5">check_circle</span>
+                    ) : (
+                      <span className={`material-symbols-outlined text-[20px] mt-0.5 ${task.id === displaySession.activeTaskId ? 'text-primary' : 'text-text-sub-light'}`}>
+                        {task.id === displaySession.activeTaskId ? 'play_circle' : 'radio_button_unchecked'}
+                      </span>
+                    )}
+                    <div>
+                      <p className={`text-sm font-bold ${task.id === displaySession.activeTaskId ? 'text-text-main-light dark:text-text-main-dark' : 'text-text-sub-light dark:text-text-sub-dark'}`}>
+                        {task.title}
+                      </p>
+                    </div>
+                    {task.finalEstimate && (
+                      <span className="ml-auto text-xs font-bold bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 px-2 py-0.5 rounded-full">{task.finalEstimate}</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+              {displaySession?.tasks.length === 0 && (
+                <p className="text-center text-sm text-text-sub-light italic py-4">No tasks in backlog</p>
+              )}
+            </div>
+            <div className="p-4 border-t border-border-light dark:border-border-dark">
+              {(isHost || displaySession?.sessionMode === 'open') && (
+                <button
+                  onClick={() => setShowTaskModal(true)}
+                  className="w-full py-2 px-4 rounded-lg border border-dashed border-border-light dark:border-border-dark text-sm font-medium text-text-sub-light hover:text-primary hover:border-primary hover:bg-primary/5 transition-colors flex items-center justify-center gap-2"
+                >
+                  <span className="material-symbols-outlined text-[18px]">add_circle</span>
+                  Add New Task
+                </button>
+              )}
+            </div>
+          </aside>
+
+        <main className="flex-1 flex flex-col items-center p-4 lg:p-10 overflow-y-auto">
+          <div className="w-full max-w-4xl flex flex-col gap-8">
+            <div className="flex flex-col gap-2 text-center sm:text-left">
+              <div className="flex items-center gap-2 justify-center sm:justify-start">
+                <span className="material-symbols-outlined text-primary text-3xl">task_alt</span>
+                <h1 className="text-3xl md:text-4xl font-black text-text-main-light dark:text-text-main-dark">{activeTask?.title}</h1>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="flex flex-col gap-2 rounded-xl p-6 border border-border-light dark:border-border-dark bg-surface-light dark:bg-surface-dark shadow-sm">
+                <div className="flex items-center gap-2 mb-1 text-text-sub-light dark:text-text-sub-dark">
+                  <span className="material-symbols-outlined text-primary">functions</span>
+                  <span className="text-sm font-medium uppercase tracking-wider">Average Vote</span>
+                </div>
+                <p className="text-5xl font-bold text-text-main-light dark:text-text-main-dark">{activeStats.average}</p>
+              </div>
+              <div className="flex flex-col gap-2 rounded-xl p-6 border border-border-light dark:border-border-dark bg-surface-light dark:bg-surface-dark shadow-sm">
+                <div className="flex items-center gap-2 mb-1 text-text-sub-light dark:text-text-sub-dark">
+                  <span className="material-symbols-outlined text-primary">analytics</span>
+                  <span className="text-sm font-medium uppercase tracking-wider">Median Vote</span>
+                </div>
+                <p className="text-5xl font-bold text-text-main-light dark:text-text-main-dark">{activeStats.median}</p>
+              </div>
+            </div>
+
+            {/* Stats/Distribution Chart */}
+            <div className="rounded-xl p-6 border border-border-light dark:border-border-dark bg-surface-light dark:bg-surface-dark shadow-sm">
+              <h3 className="text-xl font-bold text-text-main-light dark:text-text-main-dark mb-6">Vote Distribution</h3>
+              <div className="h-[200px] flex items-end justify-between gap-4">
+                {activeTask && Object.entries(formatDistribution(activeTask.votes)).map(([val, count]) => {
+                  const maxVotes = Math.max(...Object.values(formatDistribution(activeTask.votes)));
+                  const heightPct = maxVotes ? (count / maxVotes) * 100 : 0;
+                  return (
+                    <div key={val} className="flex-1 flex flex-col items-center gap-2 h-full justify-end">
+                      <div className="w-full bg-primary/10 rounded-t-md relative flex items-end justify-center overflow-hidden transition-all hover:bg-primary/20" style={{ height: `${heightPct}%`, minHeight: '24px' }}>
+                        <div className="absolute inset-x-0 bottom-0 bg-primary opacity-80 h-full"></div>
+                        <span className="relative z-10 text-white font-bold text-sm mb-1">{count}</span>
+                      </div>
+                      <span className="text-sm font-bold text-text-sub-light dark:text-text-sub-dark">{val}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {isHost && (
+              <div className="flex flex-col gap-4 p-6 rounded-xl border border-primary/20 bg-primary/5 dark:bg-[#151e2e]">
+                <div className="flex-1">
+                  <h3 className="text-lg font-bold flex items-center gap-2 text-text-main-light dark:text-text-main-dark">
+                    <span className="material-symbols-outlined text-primary">admin_panel_settings</span>
+                    Host Controls
+                  </h3>
+                  <p className="text-text-sub-light dark:text-text-sub-dark text-sm mt-1">
+                    {isLastTask ? 'Final task complete! Choose next action.' : 'Consensus reached? Enter final points.'}
+                  </p>
+                </div>
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
+                  {!isLastTask ? (
+                    <>
+                      <input
+                        className="w-full sm:w-24 bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark rounded-lg p-2.5 text-center font-bold text-lg"
+                        placeholder={activeStats.median?.toString() || "0"}
+                        onBlur={(e) => {
+                          if (activeTask) sendAction({ type: 'set_final_estimate', taskId: activeTask.id, estimate: e.target.value });
+                        }}
+                      />
+                      <button
+                        onClick={moveToNextTask}
+                        className="flex-1 sm:flex-none px-6 py-2.5 bg-primary text-white rounded-lg font-bold hover:bg-primary-hover shadow-lg flex items-center justify-center gap-2"
+                      >
+                        <span>Next Task</span>
+                        <span className="material-symbols-outlined text-[20px]">arrow_forward</span>
+                      </button>
+                      <button
+                        onClick={() => sendAction({ type: 'clear_votes' })}
+                        className="flex-1 sm:flex-none px-4 py-2.5 border border-border-light dark:border-border-dark rounded-lg hover:bg-surface-light dark:hover:bg-surface-dark text-text-main-light dark:text-text-main-dark font-medium"
+                      >
+                        Revote
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <input
+                        className="w-full sm:w-24 bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark rounded-lg p-2.5 text-center font-bold text-lg"
+                        placeholder={activeStats.median?.toString() || "0"}
+                        onBlur={(e) => {
+                          if (activeTask) sendAction({ type: 'set_final_estimate', taskId: activeTask.id, estimate: e.target.value });
+                        }}
+                      />
+                      <button
+                        onClick={() => setShowTaskModal(true)}
+                        className="flex-1 sm:flex-none px-6 py-2.5 bg-primary text-white rounded-lg font-bold hover:bg-primary-hover shadow-lg flex items-center justify-center gap-2"
+                      >
+                        <span className="material-symbols-outlined text-[20px]">add_circle</span>
+                        <span>Add More Tasks</span>
+                      </button>
+                      <button
+                        onClick={exportToCSV}
+                        className="flex-1 sm:flex-none px-6 py-2.5 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 shadow-lg flex items-center justify-center gap-2"
+                      >
+                        <span className="material-symbols-outlined text-[20px]">download</span>
+                        <span>Export CSV</span>
+                      </button>
+                      <button
+                        onClick={() => { if (confirm("End session? This will show the final summary.")) sendAction({ type: 'end_session' }) }}
+                        className="flex-1 sm:flex-none px-6 py-2.5 border-2 border-red-500 text-red-500 rounded-lg font-bold hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center justify-center gap-2"
+                      >
+                        <span className="material-symbols-outlined text-[20px]">power_settings_new</span>
+                        <span>End Session</span>
+                      </button>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        </main>
+        </div>
+
+        {/* Add Task Modal */}
+        {showTaskModal && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => {
+            setShowTaskModal(false);
+            setNewTaskTitle('');
+            setNewTaskDescription('');
+          }}>
+            <div className="bg-surface-light dark:bg-surface-dark rounded-xl shadow-2xl border border-border-light dark:border-border-dark w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+              <div className="p-6 border-b border-border-light dark:border-border-dark">
+                <h2 className="text-2xl font-bold text-text-main-light dark:text-text-main-dark">Add New Task</h2>
+                <p className="text-sm text-text-sub-light dark:text-text-sub-dark mt-1">Create a new task for the team to estimate</p>
+              </div>
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="block text-sm font-semibold text-text-main-light dark:text-text-main-dark mb-2">
+                    Task Title <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={newTaskTitle}
+                    onChange={(e) => setNewTaskTitle(e.target.value)}
+                    placeholder="e.g., Implement user authentication"
+                    className="w-full px-4 py-3 rounded-lg border border-border-light dark:border-border-dark bg-background-light dark:bg-background-dark text-text-main-light dark:text-text-main-dark focus:outline-none focus:ring-2 focus:ring-primary"
+                    autoFocus
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleAddTask();
+                      } else if (e.key === 'Escape') {
+                        setShowTaskModal(false);
+                        setNewTaskTitle('');
+                        setNewTaskDescription('');
+                      }
+                    }}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-text-main-light dark:text-text-main-dark mb-2">
+                    Description <span className="text-text-sub-light text-xs">(Optional)</span>
+                  </label>
+                  <textarea
+                    value={newTaskDescription}
+                    onChange={(e) => setNewTaskDescription(e.target.value)}
+                    placeholder="Add any additional context or requirements..."
+                    rows={4}
+                    className="w-full px-4 py-3 rounded-lg border border-border-light dark:border-border-dark bg-background-light dark:bg-background-dark text-text-main-light dark:text-text-main-dark focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Escape') {
+                        setShowTaskModal(false);
+                        setNewTaskTitle('');
+                        setNewTaskDescription('');
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+              <div className="p-6 border-t border-border-light dark:border-border-dark flex gap-3 justify-end">
+                <button
+                  onClick={() => {
+                    setShowTaskModal(false);
+                    setNewTaskTitle('');
+                    setNewTaskDescription('');
+                  }}
+                  className="px-6 py-2.5 rounded-lg border border-border-light dark:border-border-dark text-text-main-light dark:text-text-main-dark font-medium hover:bg-background-light dark:hover:bg-background-dark transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleAddTask}
+                  disabled={!newTaskTitle.trim()}
+                  className="px-6 py-2.5 rounded-lg bg-primary text-white font-bold hover:bg-primary-hover shadow-lg shadow-primary/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Add Task
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // SUMMARY VIEW
+  if (viewState === 'summary') {
+    return (
+      <div className="bg-background-light dark:bg-background-dark min-h-screen flex flex-col text-text-main-light dark:text-text-main-dark">
+        <header className="flex items-center justify-between p-6 border-b border-border-light dark:border-border-dark bg-surface-light dark:bg-surface-dark">
+          <div className="flex items-center gap-3">
+            <Link href="/" className="size-8 text-primary flex items-center justify-center rounded-lg bg-primary/10">
+              <span className="material-symbols-outlined text-2xl">style</span>
+            </Link>
+            <h2 className="text-lg font-bold">Planning Poker</h2>
+          </div>
+        </header>
+        <main className="flex-1 flex flex-col items-center justify-center p-8">
+          <div className="w-full max-w-4xl flex flex-col gap-8">
+            <div className="flex items-center gap-4">
+              <span className="material-symbols-outlined text-green-500 text-4xl">check_circle</span>
+              <h1 className="text-4xl font-black">Session Summary</h1>
+            </div>
+
+            {/* Summary Stats Cards */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div className="p-6 rounded-xl bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark shadow-sm">
+                <p className="text-sm font-bold text-text-sub-light uppercase">Total Tasks</p>
+                <p className="text-4xl font-bold mt-2">{displaySession?.tasks.length}</p>
+              </div>
+              {/* Add more stats if available */}
+            </div>
+
+            {/* Tasks List */}
+            <div className="bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark rounded-xl overflow-hidden">
+              <table className="w-full text-left">
+                <thead className="bg-background-light dark:bg-background-dark border-b border-border-light dark:border-border-dark">
+                  <tr>
+                    <th className="p-4 text-xs font-bold uppercase text-text-sub-light">Task</th>
+                    <th className="p-4 text-xs font-bold uppercase text-text-sub-light">Estimate</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border-light dark:divide-border-dark">
+                  {displaySession?.tasks.map(t => (
+                    <tr key={t.id}>
+                      <td className="p-4 font-medium">{t.title}</td>
+                      <td className="p-4">
+                        <span className="inline-flex items-center justify-center size-8 rounded-full bg-primary/10 text-primary font-bold text-sm">
+                          {t.finalEstimate || '-'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex justify-start gap-4">
+              <Link href="/" className="px-6 py-3 bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark rounded-lg font-bold hover:bg-background-light transition-colors">
+                Back to Home
+              </Link>
+              <Link href="/create" className="px-6 py-3 bg-primary text-white rounded-lg font-bold hover:bg-primary-hover shadow-lg">
+                New Session
+              </Link>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  // DASHBOARD VIEW (Default)
+  return (
+    <div className="font-display bg-background-light dark:bg-background-dark text-text-main-light dark:text-text-main-dark overflow-hidden h-screen flex flex-col">
+      {/* Header */}
+      <header className="h-16 flex items-center justify-between px-6 bg-surface-light dark:bg-surface-dark border-b border-border-light dark:border-border-dark z-20 shrink-0">
+        <div className="flex items-center gap-4">
+          <Link href="/" className="size-8 bg-primary rounded-lg flex items-center justify-center text-white">
+            <span className="material-symbols-outlined text-[20px]">style</span>
+          </Link>
+          <div className="flex flex-col">
+            <h1 className="text-base font-bold leading-none">Planning Poker</h1>
+            <span className="text-xs text-text-sub-light dark:text-text-sub-dark font-medium mt-1">Session #{sessionId}</span>
+          </div>
+        </div>
+        <div className="flex items-center gap-6">
+          <div className="hidden md:flex items-center gap-2 px-3 py-1.5 bg-background-light dark:bg-background-dark rounded-full">
+            <span className="material-symbols-outlined text-green-600 dark:text-green-500 text-[18px]">check_circle</span>
+            <span className="text-sm font-medium text-text-sub-light dark:text-text-sub-dark">
+              {displaySession?.tasks.filter(t => t.finalEstimate).length}/{displaySession?.tasks.length} Tasks
+            </span>
+          </div>
+          <div className="h-8 w-px bg-border-light dark:bg-border-dark"></div>
+          <div className="flex items-center gap-3">
+            <ThemeToggle />
+            <div className="flex items-center gap-2">
+              <div className="size-8 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-xs uppercase border border-primary/20">
+                {displayName.substring(0, 2)}
+              </div>
+              <span className="text-sm font-medium hidden sm:block">{displayName}</span>
+            </div>
+          </div>
+        </div>
+      </header>
+
+      <div className="flex flex-1 overflow-hidden">
+        {/* Sidebar (Backlog) */}
+        <aside className="w-80 bg-surface-light dark:bg-surface-dark border-r border-border-light dark:border-border-dark flex flex-col shrink-0 z-10 hidden md:flex">
+          {/* QR Code Section (Host only) */}
+          {isHost && (
+            <div className="p-4 border-b border-border-light dark:border-border-dark">
+              <button
+                onClick={() => setShowQR(!showQR)}
+                className="w-full flex items-center justify-between text-left group"
+              >
+                <h3 className="font-semibold text-sm uppercase tracking-wider text-text-sub-light dark:text-text-sub-dark group-hover:text-primary transition-colors">
+                  Invite Participants
+                </h3>
+                <span className="material-symbols-outlined text-text-sub-light group-hover:text-primary transition-all" style={{ transform: showQR ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+                  expand_more
+                </span>
+              </button>
+              {showQR && (
+                <div className="mt-4 flex flex-col gap-3 animate-fade-in">
+                  {qrCodeUrl && (
+                    <div className="flex justify-center p-3 bg-white rounded-lg">
+                      <img src={qrCodeUrl} alt="Session QR Code" className="w-40 h-40" />
+                    </div>
+                  )}
+                  <div className="flex flex-col gap-2">
+                    <label className="text-xs font-semibold text-text-sub-light dark:text-text-sub-dark uppercase">Join Link</label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={typeof window !== 'undefined' ? `${window.location.origin}/session/${sessionId}` : ''}
+                        readOnly
+                        className="flex-1 px-3 py-2 text-xs rounded-lg border border-border-light dark:border-border-dark bg-background-light dark:bg-background-dark font-mono"
+                      />
+                      <button
+                        onClick={() => {
+                          if (typeof window !== 'undefined') {
+                            navigator.clipboard.writeText(`${window.location.origin}/session/${sessionId}`);
+                          }
+                        }}
+                        className="px-3 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors"
+                        title="Copy link"
+                      >
+                        <span className="material-symbols-outlined text-[18px]">content_copy</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          <div className="p-4 border-b border-border-light dark:border-border-dark flex justify-between items-center">
+            <h2 className="font-semibold text-sm uppercase tracking-wider text-text-sub-light dark:text-text-sub-dark">Backlog</h2>
+          </div>
+          <div className="flex-1 overflow-y-auto p-3 space-y-2">
+            {displaySession?.tasks.map(task => (
               <div
                 key={task.id}
                 onClick={() => isHost && sendAction({ type: 'select_task', taskId: task.id })}
-                className={`p-3 rounded-lg border cursor-pointer transition-all ${
-                  task.id === displaySession?.activeTaskId
-                    ? 'border-[var(--accent-color)] bg-[var(--accent-color)]/5'
-                    : 'border-[var(--border-color)] bg-[var(--bg-card)]'
-                }`}
+                className={`group relative flex flex-col p-4 rounded-xl shadow-sm cursor-pointer transition-all border ${task.id === displaySession.activeTaskId
+                  ? 'bg-surface-light dark:bg-surface-dark border-l-4 border-l-primary ring-1 ring-border-light dark:ring-border-dark'
+                  : 'hover:bg-background-light dark:hover:bg-background-dark/50 border-transparent opacity-70 hover:opacity-100'
+                  }`}
               >
-                <div className="flex justify-between items-start">
-                  <span
-                    className={`font-medium text-sm ${
-                      task.id === displaySession?.activeTaskId ? 'text-[var(--accent-hover)]' : ''
-                    }`}
-                  >
-                    {task.title}
-                  </span>
-                  {task.id === displaySession?.activeTaskId && (
-                    <span className="text-[10px] bg-[var(--accent-color)] text-white px-1.5 py-0.5 rounded ml-2">
-                      ACTIVE
+                <div className="flex items-start gap-3">
+                  {task.finalEstimate ? (
+                    <span className="material-symbols-outlined text-green-500 text-[20px] mt-0.5">check_circle</span>
+                  ) : (
+                    <span className={`material-symbols-outlined text-[20px] mt-0.5 ${task.id === displaySession.activeTaskId ? 'text-primary' : 'text-text-sub-light'}`}>
+                      {task.id === displaySession.activeTaskId ? 'play_circle' : 'radio_button_unchecked'}
                     </span>
                   )}
-                </div>
-                {(task.finalEstimate || Object.keys(task.votes).length > 0) && (
-                  <div className="flex gap-2 text-xs text-muted mt-1">
-                    {task.finalEstimate ? (
-                      <span className="text-green-400 font-bold">Est: {task.finalEstimate}</span>
-                    ) : (
-                      <span>{Object.keys(task.votes).length} votes</span>
-                    )}
+                  <div>
+                    <p className={`text-sm font-bold ${task.id === displaySession.activeTaskId ? 'text-text-main-light dark:text-text-main-dark' : 'text-text-sub-light dark:text-text-sub-dark'}`}>
+                      {task.title}
+                    </p>
                   </div>
-                )}
+                  {task.finalEstimate && (
+                    <span className="ml-auto text-xs font-bold bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 px-2 py-0.5 rounded-full">{task.finalEstimate}</span>
+                  )}
+                </div>
               </div>
             ))}
+            {displaySession?.tasks.length === 0 && (
+              <p className="text-center text-sm text-text-sub-light italic py-4">No tasks in backlog</p>
+            )}
+          </div>
+          {/* Add Task Input (Host only or Open) */}
+          <div className="p-4 border-t border-border-light dark:border-border-dark">
             {(isHost || displaySession?.sessionMode === 'open') && (
-              <div className="mt-4">
-                <TaskDialog onAddTask={(title) => sendAction({ type: 'add_task', title })} />
-              </div>
+              <button
+                onClick={() => setShowTaskModal(true)}
+                className="w-full py-2 px-4 rounded-lg border border-dashed border-border-light dark:border-border-dark text-sm font-medium text-text-sub-light hover:text-primary hover:border-primary hover:bg-primary/5 transition-colors flex items-center justify-center gap-2"
+              >
+                <span className="material-symbols-outlined text-[18px]">add_circle</span>
+                Add New Task
+              </button>
             )}
           </div>
-        )}
+        </aside>
 
-        {activeTab === 'people' && (
-          <div className="space-y-2 animate-fade-in">
-            <h2 className="text-xs uppercase tracking-wider text-muted font-bold mb-2">
-              Participants ({Object.keys(displaySession?.participants || {}).length})
-            </h2>
-            {Object.entries(displaySession?.participants || {}).map(([name, p]) => {
-              const hasVoted = activeTask && activeTask.votes[name] !== undefined;
-              return (
-                <div
-                  key={name}
-                  className="flex justify-between items-center p-2 rounded bg-[var(--bg-card)] border border-[var(--border-color)]"
-                >
+        {/* Main Stage */}
+        <main className="flex-1 flex flex-col overflow-y-auto bg-background-light dark:bg-background-dark relative">
+          <div className="flex-1 w-full max-w-5xl mx-auto p-8 flex flex-col gap-8">
+            {!activeTask ? (
+              <div className="flex flex-col items-center justify-center h-full text-text-sub-light">
+                <div className="size-20 bg-surface-light dark:bg-surface-dark rounded-full flex items-center justify-center text-4xl mb-4 shadow-sm">🎲</div>
+                <h2 className="text-2xl font-bold text-text-main-light dark:text-text-main-dark">Ready to Estimate</h2>
+                <p>Select a task from the backlog to begin.</p>
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-col gap-4 animate-fade-in">
                   <div className="flex items-center gap-3">
-                    <div
-                      className={`w-8 h-8 rounded-full flex-center text-xs font-bold text-white ${
-                        name === displayName
-                          ? 'bg-gradient-to-br from-violet-500 to-fuchsia-500'
-                          : 'bg-slate-600'
-                      }`}
-                    >
-                      {name.substring(0, 2).toUpperCase()}
-                    </div>
-                    <div className="flex flex-col">
-                      <span className={`leading-tight text-sm ${name === displayName ? 'font-bold' : ''}`}>
-                        {name}
+                    {displaySession?.voting.status === 'open' && (
+                      <span className="bg-primary/10 text-primary text-xs font-bold px-2.5 py-1 rounded-md flex items-center gap-1">
+                        <span className="size-2 bg-primary rounded-full animate-pulse"></span>
+                        VOTING OPEN
                       </span>
-                      <span className="text-[10px] text-muted capitalize">{p.role}</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {hasVoted && (
-                      <span className="text-xs bg-green-500/20 text-green-400 px-1.5 py-0.5 rounded">Voted</span>
                     )}
-                    {isHost && name !== displayName && (
-                      <div className="flex gap-1">
-                        <button
-                          className="text-muted hover:text-[var(--text-primary)]"
-                          onClick={() =>
-                            sendAction({
-                              type: 'set_role',
-                              name,
-                              role: p.role === 'voter' ? 'observer' : 'voter'
-                            })
-                          }
-                        >
-                          {p.role === 'voter' ? '👁️' : '🗳️'}
-                        </button>
-                        <button
-                          className="text-red-400 hover:text-red-300"
-                          onClick={() => sendAction({ type: 'kick', name })}
-                        >
-                          ✕
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {activeTab === 'settings' && (
-          <div className="space-y-6 animate-fade-in">
-            <section>
-              <h2 className="text-xs uppercase tracking-wider text-muted-foreground font-bold mb-3">
-                Share Session
-              </h2>
-              <SessionQR sessionId={sessionId!} compact />
-            </section>
-
-            <section>
-              <h2 className="text-xs uppercase tracking-wider text-muted-foreground font-bold mb-3">Controls</h2>
-              <div className="grid grid-cols-2 gap-2">
-                <Button variant="outline" size="sm" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>
-                  {theme === 'light' ? '🌙 Dark' : '☀️ Light'}
-                </Button>
-                {isHost && (
-                  <Button variant="outline" size="sm" onClick={exportCsv}>
-                    📄 Export CSV
-                  </Button>
-                )}
-              </div>
-            </section>
-
-            {isHost && (
-              <section className="p-4 rounded-lg bg-destructive/10 border border-destructive/20">
-                <h2 className="text-sm font-bold text-destructive mb-3">Danger Zone</h2>
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  className="w-full"
-                  onClick={() => {
-                    if (confirm('End session? This cannot be undone.')) sendAction({ type: 'end_session' });
-                  }}
-                >
-                  End Session
-                </Button>
-              </section>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className="p-4 border-t border-[var(--border-color)] flex items-center gap-3 shrink-0">
-        <div className="w-8 h-8 rounded-full bg-gradient-to-br from-cyan-500 to-blue-500 flex-center text-white font-bold">
-          {displayName.charAt(0)}
-        </div>
-        <div className="flex flex-col">
-          <span className="font-medium text-sm">{displayName}</span>
-          <span className="text-xs text-muted capitalize">{role}</span>
-        </div>
-      </div>
-    </>
-  );
-
-  const renderStage = () => (
-    <div className="flex-1 overflow-y-auto p-4 md:p-10 flex flex-col items-center">
-      {/* Desktop QR Code Banner */}
-      <div className="hidden lg:block w-full max-w-4xl mb-6">
-        <SessionQR sessionId={sessionId!} />
-      </div>
-
-      <div className="w-full max-w-4xl space-y-8 pb-20 md:pb-0">
-        {!activeTask ? (
-          <div className="flex flex-col items-center justify-center py-20 text-muted-foreground animate-fade-in">
-            <div className="w-20 h-20 bg-card rounded-full flex items-center justify-center mb-6 text-4xl border border-border">
-              🎲
-            </div>
-            <h2 className="text-2xl font-bold mb-2">Ready to Estimate</h2>
-            <p>Select a task from the sidebar to start.</p>
-          </div>
-        ) : (
-          <div className="animate-fade-in text-center">
-            <div className="mb-8">
-              <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/10 text-violet-400 text-xs font-bold uppercase tracking-wider mb-4 border border-violet-500/20">
-                <span className="w-2 h-2 rounded-full bg-violet-400 animate-pulse"></span>
-                Voting {displaySession?.voting.status}
-              </div>
-              <h2 className="text-3xl md:text-5xl font-bold leading-tight mb-6">{activeTask.title}</h2>
-              <div className="flex flex-col items-center gap-4">
-                {displaySession?.voting.status === 'open' && (
-                  <div className="font-mono text-3xl md:text-4xl font-bold text-[var(--accent-color)]">
-                    {votingEndsIn !== null ? (
-                      <span>
-                        {Math.floor(votingEndsIn / 60)}:{(votingEndsIn % 60).toString().padStart(2, '0')}
+                    {displaySession?.voting.status === 'idle' && (
+                      <span className="bg-secondary/10 text-secondary-foreground text-xs font-bold px-2.5 py-1 rounded-md">
+                        READY TO VOTE
                       </span>
-                    ) : (
-                      '--:--'
+                    )}
+                    {isHost && (
+                      <button onClick={() => sendAction({ type: 'clear_votes' })} className="text-xs text-text-sub-light hover:text-text-main-light underline">Reset Session Votes</button>
                     )}
                   </div>
-                )}
-                {isHost && (
-                  <div className="flex flex-wrap justify-center gap-3 p-2 rounded-2xl bg-[var(--bg-panel)] border border-[var(--border-color)] shadow-lg">
-                    {displaySession?.voting.status !== 'open' ? (
-                      <>
-                        <input
-                          type="number"
-                          value={duration}
-                          onChange={(e) => setDuration(Number(e.target.value))}
-                          className="input w-16 text-center py-2 h-10 font-mono"
-                          min={10}
-                          max={3600}
-                        />
+                  <h1 className="text-3xl md:text-4xl font-bold text-text-main-light dark:text-text-main-dark tracking-tight">{activeTask.title}</h1>
+                  {activeTask.description && (
+                    <div className="mt-2">
+                      <p className={`text-text-sub-light dark:text-text-sub-dark ${!expandedDescription && activeTask.description.length > 150 ? 'line-clamp-2' : ''}`}>
+                        {activeTask.description}
+                      </p>
+                      {activeTask.description.length > 150 && (
                         <button
-                          onClick={() => sendAction({ type: 'start_voting', durationSeconds: duration })}
-                          className="btn btn-primary px-4"
+                          onClick={() => setExpandedDescription(!expandedDescription)}
+                          className="text-sm text-primary hover:underline mt-1"
                         >
-                          Start
+                          {expandedDescription ? 'Show less' : 'Show more'}
                         </button>
-                      </>
-                    ) : (
-                      <>
-                        <button onClick={() => sendAction({ type: 'reveal' })} className="btn btn-primary px-4">
-                          Reveal
-                        </button>
-                        <button
-                          onClick={() => sendAction({ type: 'add_time', seconds: 30 })}
-                          className="btn btn-secondary px-3"
-                        >
-                          +30s
-                        </button>
-                        <button
-                          onClick={() => sendAction({ type: 'close_voting' })}
-                          className="btn btn-ghost text-red-400 px-3"
-                        >
-                          Stop
-                        </button>
-                      </>
-                    )}
-                    <button
-                      onClick={() => sendAction({ type: 'clear_votes' })}
-                      className="btn btn-ghost px-3 text-muted"
-                      title="Reset"
-                    >
-                      Reset
-                    </button>
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {displaySession?.voting.status !== 'revealed' && (
-              <VotingGrid
-                deck={deck}
-                selectedValue={voteValue}
-                role={role}
-                votingStatus={displaySession?.voting.status || 'idle'}
-                onVote={(value) =>
-                  sendAction(
-                    { type: 'cast_vote', value },
-                    // Optimistic update for instant feedback
-                    (s) => {
-                      const task = s.tasks.find((t) => t.id === s.activeTaskId);
-                      if (task && displayName) {
-                        task.votes[displayName] = value;
-                      }
-                      return s;
-                    }
-                  )
-                }
-              />
-            )}
-
-            {displaySession?.voting.status === 'revealed' && (
-              <div className="max-w-4xl mx-auto space-y-8 animate-fade-in px-4">
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  <div className="p-4 rounded-2xl bg-[var(--bg-panel)] border border-[var(--border-color)] flex flex-col items-center">
-                    <span className="text-xs uppercase text-muted font-bold">Average</span>
-                    <span className="text-4xl font-bold text-[var(--accent-color)] mt-2">
-                      {activeStats.average ?? '-'}
-                    </span>
-                  </div>
-                  <div className="p-4 rounded-2xl bg-[var(--bg-panel)] border border-[var(--border-color)] flex flex-col items-center">
-                    <span className="text-xs uppercase text-muted font-bold">Median</span>
-                    <span className="text-4xl font-bold text-fuchsia-400 mt-2">{activeStats.median ?? '-'}</span>
-                  </div>
-                  {isHost && (
-                    <div className="col-span-2 p-4 rounded-2xl bg-gradient-to-r from-violet-500/10 to-fuchsia-500/10 border border-violet-500/20 flex flex-col justify-center">
-                      <label className="text-xs uppercase text-violet-300 font-bold mb-2 text-left">
-                        Final Decision
-                      </label>
-                      <div className="flex gap-2">
-                        <input
-                          className="input bg-[var(--bg-app)] border-violet-500/30 text-center font-bold"
-                          placeholder="Value"
-                          value={activeTask.finalEstimate ?? ''}
-                          onChange={(e) =>
-                            sendAction({
-                              type: 'set_final_estimate',
-                              taskId: activeTask.id,
-                              estimate: e.target.value
-                            })
-                          }
-                          maxLength={20}
-                        />
-                        <button
-                          onClick={() => sendAction({ type: 'add_task', title: 'Next' })}
-                          className="btn btn-primary whitespace-nowrap"
-                        >
-                          Next Task
-                        </button>
-                      </div>
+                      )}
                     </div>
                   )}
                 </div>
-                <div className="p-6 rounded-2xl bg-[var(--bg-panel)] border border-[var(--border-color)] text-left">
-                  <h3 className="font-bold text-muted mb-4 text-sm">Agreement Distribution</h3>
-                  <div className="flex items-end h-24 gap-2">
-                    {Object.entries(formatDistribution(activeTask.votes)).map(([val, count]) => {
-                      const maxVotes = Math.max(...Object.values(formatDistribution(activeTask.votes)));
-                      const heightPct = maxVotes ? (count / maxVotes) * 100 : 0;
-                      return (
-                        <div key={val} className="flex-1 flex flex-col items-center gap-2 group">
-                          <div
-                            className="w-full bg-[var(--bg-app)] rounded-t-lg relative flex items-end justify-center overflow-hidden"
-                            style={{ height: '100%' }}
+
+                {/* Voting Area */}
+                <div className="flex flex-col gap-6 mt-4">
+                  {displaySession?.voting.status === 'idle' ? (
+                    <div className="flex flex-col items-center justify-center py-12 rounded-xl border-2 border-dashed border-border-light dark:border-border-dark bg-surface-light/50 dark:bg-surface-dark/50">
+                      {isHost ? (
+                        <div className="text-center space-y-4">
+                          <p className="text-text-sub-light dark:text-text-sub-dark">Task is selected. Start voting when ready.</p>
+                          <button
+                            onClick={() => sendAction({ type: 'start_voting', durationSeconds: 0 })}
+                            className="px-8 py-3 bg-primary text-white font-bold rounded-xl shadow-lg shadow-primary/20 hover:bg-primary-hover hover:scale-105 transition-all text-lg"
                           >
-                            <div
-                              className="w-full bg-violet-500/50 absolute bottom-0 transition-all duration-500"
-                              style={{ height: `${heightPct}%` }}
-                            ></div>
-                            <span className="relative z-10 text-xs font-bold mb-1">{count > 0 ? count : ''}</span>
-                          </div>
-                          <span className="text-xs font-mono text-muted">{val}</span>
+                            Start Voting
+                          </button>
                         </div>
-                      );
-                    })}
+                      ) : (
+                        <div className="text-center space-y-2">
+                          <div className="size-12 border-4 border-border-light dark:border-border-dark border-t-primary rounded-full animate-spin mx-auto"></div>
+                          <p className="text-text-main-light dark:text-text-main-dark font-medium">Waiting for host to open voting...</p>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-lg font-bold text-text-main-light dark:text-text-main-dark flex items-center gap-2">
+                          Select your estimate
+                          <span className="text-xs font-normal text-text-sub-light bg-background-light dark:bg-surface-dark border border-border-light dark:border-border-dark px-2 py-0.5 rounded-full">Fibonacci</span>
+                        </h3>
+                        <span className="text-sm font-medium text-text-sub-light">Your vote: <span className="text-primary font-bold">{localVote || '-'}</span></span>
+                      </div>
+                      <div className={`grid grid-cols-4 sm:grid-cols-6 lg:grid-cols-7 xl:grid-cols-9 gap-3 ${displaySession?.voting.status === 'closed' ? 'opacity-50 pointer-events-none' : ''}`}>
+                        {deck.map((vote) => (
+                          <button
+                            key={vote}
+                            onClick={() => {
+                              setLocalVote(vote);
+                              sendAction({ type: 'cast_vote', value: vote });
+                            }}
+                            className={`group relative aspect-[3/4] rounded-xl flex flex-col items-center justify-center transition-all duration-200
+                                                        ${localVote === vote
+                                ? 'bg-primary shadow-lg shadow-primary/30 ring-2 ring-offset-2 ring-primary ring-offset-background-light dark:ring-offset-background-dark -translate-y-2'
+                                : 'bg-surface-light dark:bg-surface-dark border-2 border-transparent shadow-sm hover:shadow-lg hover:-translate-y-1 hover:border-primary/50'
+                              }`}
+                          >
+                            <span className={`text-2xl font-bold ${localVote === vote ? 'text-white' : 'text-text-main-light dark:text-text-main-dark group-hover:text-primary'}`}>{vote}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                <div className="mt-8">
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="text-lg font-bold text-text-main-light dark:text-text-main-dark">Team Progress</h3>
+                    <span className="bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1">
+                      <span className="size-2 rounded-full bg-green-500 animate-pulse"></span>
+                      {votedCount}/{totalVoters} Voted
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+                    {participantsList.map((p) => (
+                      <div key={p.name} className={`flex items-center gap-3 p-3 rounded-lg border ${p.hasVoted ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800/30' : 'bg-surface-light dark:bg-surface-dark border-border-light dark:border-border-dark'}`}>
+                        <div className="relative">
+                          <div className="size-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm uppercase">
+                            {p.name.substring(0, 2)}
+                          </div>
+                          {p.hasVoted && (
+                            <div className="absolute -bottom-1 -right-1 bg-green-500 rounded-full p-0.5 border-2 border-white dark:border-surface-dark">
+                              <span className="material-symbols-outlined text-white text-[12px] block">check</span>
+                            </div>
+                          )}
+                          {!p.hasVoted && displaySession?.voting.status === 'open' && (
+                            <div className="absolute -bottom-1 -right-1 bg-yellow-400 rounded-full p-0.5 border-2 border-white dark:border-surface-dark animate-pulse">
+                              <span className="material-symbols-outlined text-white text-[12px] block">more_horiz</span>
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex flex-col">
+                          <span className="text-sm font-bold text-text-main-light dark:text-text-main-dark">{p.name} {p.name === displayName ? '(You)' : ''}</span>
+                          <span className="text-xs text-text-sub-light dark:text-text-sub-dark font-medium">{p.hasVoted ? 'Voted' : (displaySession?.voting.status === 'idle' ? 'Ready' : 'Thinking...')}</span>
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                  {Object.entries(activeTask.votes).map(([voterName, val]) => (
-                    <div
-                      key={voterName}
-                      className="flex items-center gap-3 p-3 rounded-xl bg-[var(--bg-panel)] border border-[var(--border-color)]"
-                    >
-                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 flex-center text-xs font-bold text-white shrink-0">
-                        {voterName.charAt(0).toUpperCase()}
-                      </div>
-                      <div className="flex flex-col text-left overflow-hidden">
-                        <span className="text-sm font-medium truncate w-full">{voterName}</span>
-                        <span className="text-xs text-[var(--accent-color)] font-bold">{val}</span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
+              </>
             )}
           </div>
-        )}
-      </div>
-    </div>
-  );
 
-  return (
-    <div className="flex flex-col md:flex-row h-screen overflow-hidden text-sm md:text-base bg-[var(--bg-app)]">
-      <ConnectionStatus />
-
-      {/* DESKTOP SIDEBAR */}
-      <aside className="hidden md:flex flex-col w-80 shrink-0 border-r border-[var(--border-color)] bg-[var(--bg-panel)] z-20">
-        {renderSidebarContent()}
-      </aside>
-
-      {/* MAIN STAGE */}
-      <main
-        className={`flex-1 flex flex-col h-full overflow-hidden bg-[var(--bg-app)] relative ${
-          mobileView === 'tabs' ? 'hidden md:flex' : 'flex'
-        }`}
-      >
-        {/* Mobile Header */}
-        <div className="md:hidden h-14 flex items-center justify-between px-4 border-b border-[var(--border-color)] bg-[var(--bg-panel)] shrink-0">
-          <span className="font-bold text-lg bg-gradient-to-r from-violet-400 to-fuchsia-400 bg-clip-text text-transparent">
-            VibePoker
-          </span>
-          <button
-            onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
-            className="btn btn-icon btn-ghost"
-          >
-            {theme === 'light' ? '🌙' : '☀️'}
-          </button>
-        </div>
-
-        {/* QR Overlay */}
-        {showQR && (
-          <div
-            className="absolute inset-0 z-50 bg-black/80 backdrop-blur-sm flex-center p-6"
-            onClick={() => setShowQR(false)}
-          >
-            <div className="card bg-white text-black text-center max-w-sm w-full" onClick={(e) => e.stopPropagation()}>
-              <h3 className="mb-4 text-xl font-bold">Join Session</h3>
-              <canvas ref={qrCanvasRef} className="rounded-lg mx-auto shadow-xl" />
-              <div className="mt-4 p-3 bg-gray-100 rounded text-sm font-mono break-all select-all">
-                {window.location.origin}/session/{sessionId}
+          {/* Bottom Bar (Sticky) */}
+          <div className="sticky bottom-0 w-full bg-surface-light dark:bg-surface-dark border-t border-border-light dark:border-border-dark p-4 shadow-lg z-20">
+            <div className="max-w-5xl mx-auto flex items-center justify-between">
+              <div className="hidden sm:block">
+                <p className="text-sm text-text-sub-light dark:text-text-sub-dark">
+                  {activeTask ?
+                    (displaySession?.voting.status === 'open' ? `Waiting for ${totalVoters - votedCount} participants to vote...` :
+                      (displaySession?.voting.status === 'idle' ? 'Waiting for host to start voting...' : 'Voting closed'))
+                    : 'Select a task to start'}
+                </p>
               </div>
-              <button className="btn btn-primary mt-6 w-full" onClick={() => setShowQR(false)}>
-                Close
+              <div className="flex items-center gap-4 w-full sm:w-auto">
+                {isHost && (
+                  <button
+                    onClick={() => sendAction({ type: 'reveal' })}
+                    disabled={!activeTask || votedCount === 0 || displaySession?.voting.status !== 'open'}
+                    className="flex-1 sm:flex-none px-8 py-2.5 rounded-lg text-sm font-bold text-white bg-primary hover:bg-primary-hover shadow-md shadow-primary/20 transition-all flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <span className="material-symbols-outlined text-[20px]">visibility</span>
+                    Reveal Cards
+                  </button>
+                )}
+                {isHost && (
+                  <button className="p-2 text-text-sub-light hover:text-red-500" title="End Session" onClick={() => { if (confirm("End session?")) sendAction({ type: 'end_session' }) }}>
+                    <span className="material-symbols-outlined">power_settings_new</span>
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+
+      {/* Add Task Modal */}
+      {showTaskModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => {
+          setShowTaskModal(false);
+          setNewTaskTitle('');
+          setNewTaskDescription('');
+        }}>
+          <div className="bg-surface-light dark:bg-surface-dark rounded-xl shadow-2xl border border-border-light dark:border-border-dark w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+            <div className="p-6 border-b border-border-light dark:border-border-dark">
+              <h2 className="text-2xl font-bold text-text-main-light dark:text-text-main-dark">Add New Task</h2>
+              <p className="text-sm text-text-sub-light dark:text-text-sub-dark mt-1">Create a new task for the team to estimate</p>
+            </div>
+            <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-text-main-light dark:text-text-main-dark mb-2">
+                  Task Title <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={newTaskTitle}
+                  onChange={(e) => setNewTaskTitle(e.target.value)}
+                  placeholder="e.g., Implement user authentication"
+                  className="w-full px-4 py-3 rounded-lg border border-border-light dark:border-border-dark bg-background-light dark:bg-background-dark text-text-main-light dark:text-text-main-dark focus:outline-none focus:ring-2 focus:ring-primary"
+                  autoFocus
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleAddTask();
+                    } else if (e.key === 'Escape') {
+                      setShowTaskModal(false);
+                      setNewTaskTitle('');
+                      setNewTaskDescription('');
+                    }
+                  }}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-semibold text-text-main-light dark:text-text-main-dark mb-2">
+                  Description <span className="text-text-sub-light text-xs">(Optional)</span>
+                </label>
+                <textarea
+                  value={newTaskDescription}
+                  onChange={(e) => setNewTaskDescription(e.target.value)}
+                  placeholder="Add any additional context or requirements..."
+                  rows={4}
+                  className="w-full px-4 py-3 rounded-lg border border-border-light dark:border-border-dark bg-background-light dark:bg-background-dark text-text-main-light dark:text-text-main-dark focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      setShowTaskModal(false);
+                      setNewTaskTitle('');
+                      setNewTaskDescription('');
+                    }
+                  }}
+                />
+              </div>
+            </div>
+            <div className="p-6 border-t border-border-light dark:border-border-dark flex gap-3 justify-end">
+              <button
+                onClick={() => {
+                  setShowTaskModal(false);
+                  setNewTaskTitle('');
+                  setNewTaskDescription('');
+                }}
+                className="px-6 py-2.5 rounded-lg border border-border-light dark:border-border-dark text-text-main-light dark:text-text-main-dark font-medium hover:bg-background-light dark:hover:bg-background-dark transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAddTask}
+                disabled={!newTaskTitle.trim()}
+                className="px-6 py-2.5 rounded-lg bg-primary text-white font-bold hover:bg-primary-hover shadow-lg shadow-primary/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Add Task
               </button>
             </div>
           </div>
-        )}
-
-        {renderStage()}
-      </main>
-
-      {/* MOBILE TABS VIEW */}
-      {mobileView === 'tabs' && (
-        <div className="md:hidden flex-1 flex flex-col bg-[var(--bg-panel)] z-10 w-full animate-fade-in">
-          {renderSidebarContent()}
         </div>
       )}
-
-      {/* BOTTOM NAV */}
-      <nav className="md:hidden h-16 bg-card border-t border-border flex items-center justify-around z-50 shrink-0 shadow-lg">
-        {([
-          { view: 'stage', icon: '🎲', label: 'Stage' },
-          { view: 'tabs', tab: 'tasks', icon: '📋', label: 'Tasks' },
-          { view: 'tabs', tab: 'people', icon: '👥', label: 'People' },
-          { view: 'tabs', tab: 'settings', icon: '⚙️', label: 'Menu' }
-        ] as const).map((item) => (
-          <button
-            key={item.label}
-            onClick={() => {
-              setMobileView(item.view as MobileView);
-              if (item.tab) setActiveTab(item.tab as Tab);
-            }}
-            className={`flex flex-col items-center gap-1 p-3 rounded-lg transition-colors min-w-[60px] ${
-              (mobileView === item.view && (!item.tab || activeTab === item.tab))
-                ? 'text-primary bg-primary/10'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
-          >
-            <span className="text-xl">{item.icon}</span>
-            <span className="text-[10px] font-semibold">{item.label}</span>
-          </button>
-        ))}
-      </nav>
     </div>
   );
 }
 
-// Wrap with error boundary
-export default function SessionPage() {
-  return (
-    <ErrorBoundary>
-      <SessionPageContent />
-    </ErrorBoundary>
-  );
-}

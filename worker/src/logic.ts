@@ -65,7 +65,7 @@ function cloneSession(session: SessionState): SessionState {
 function ensureTask(session: SessionState) {
     if (!session.tasks.length) {
         const taskId = `task-${Date.now()}`;
-        session.tasks.push({ id: taskId, title: 'New Task', votes: {}, finalEstimate: null });
+        session.tasks.push({ id: taskId, title: 'New Task', description: '', votes: {}, finalEstimate: null });
         session.activeTaskId = taskId;
     }
 }
@@ -143,8 +143,9 @@ export function applyAction(session: SessionState, action: Action): SessionState
             if (!action.actor || !next.participants[action.actor]) return next;
 
             const sanitizedTitle = sanitizeString(action.title, MAX_TASK_TITLE_LENGTH);
+            const sanitizedDescription = action.description ? sanitizeString(action.description, 500) : undefined;
             const id = `task-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
-            next.tasks.push({ id, title: sanitizedTitle, votes: {}, finalEstimate: null });
+            next.tasks.push({ id, title: sanitizedTitle, description: sanitizedDescription, votes: {}, finalEstimate: null });
             if (!next.activeTaskId) next.activeTaskId = id;
             return next;
         }
@@ -184,13 +185,13 @@ export function applyAction(session: SessionState, action: Action): SessionState
         case 'start_voting': {
             if (!requireHost(next, action)) return next;
 
-            // Validate duration
-            if (action.durationSeconds < 10 || action.durationSeconds > 3600) {
+            // Validate duration (0 means unlimited)
+            if (action.durationSeconds < 0 || action.durationSeconds > 3600) {
                 console.warn('Invalid duration:', action.durationSeconds);
                 return next;
             }
 
-            const endsAt = nowSeconds() + action.durationSeconds;
+            const endsAt = action.durationSeconds === 0 ? null : nowSeconds() + action.durationSeconds;
             next.voting = { status: 'open', endsAt };
             ensureTask(next);
             const task = next.tasks.find((t) => t.id === next.activeTaskId);

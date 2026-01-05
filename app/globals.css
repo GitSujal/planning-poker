@@ -5,70 +5,133 @@
 @layer base {
   :root {
     /* shadcn/ui Design Tokens (HSL format) */
-    --background: 222.2 84% 4.9%;           /* #0f172a - Slate 900 */
-    --foreground: 210 40% 98%;              /* #f8fafc - Slate 50 */
+    --background: 222.2 84% 4.9%;
+    /* #0f172a - Slate 900 */
+    --foreground: 210 40% 98%;
+    /* #f8fafc - Slate 50 */
 
-    --card: 217.2 32.6% 17.5%;              /* #1e293b - Slate 800 */
+    --card: 217.2 32.6% 17.5%;
+    /* #1e293b - Slate 800 */
     --card-foreground: 210 40% 98%;
 
     --popover: 217.2 32.6% 17.5%;
     --popover-foreground: 210 40% 98%;
 
-    --primary: 263.4 70% 50.4%;             /* #8b5cf6 - Violet 500 */
+    --primary: 263.4 70% 50.4%;
+    /* #8b5cf6 - Violet 500 */
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 215 16.3% 26.9%;           /* #334155 - Slate 700 */
+    --secondary: 215 16.3% 26.9%;
+    /* #334155 - Slate 700 */
     --secondary-foreground: 210 40% 98%;
 
     --muted: 215 16.3% 26.9%;
-    --muted-foreground: 215.4 16.3% 56.9%;  /* #94a3b8 - Slate 400 */
+    --muted-foreground: 215.4 16.3% 56.9%;
+    /* #94a3b8 - Slate 400 */
 
-    --accent: 263.4 70% 50.4%;              /* Violet 500 */
+    --accent: 263.4 70% 50.4%;
+    /* Violet 500 */
     --accent-foreground: 0 0% 100%;
 
-    --destructive: 0 84.2% 60.2%;           /* #ef4444 - Red 500 */
+    --destructive: 0 84.2% 60.2%;
+    /* #ef4444 - Red 500 */
     --destructive-foreground: 210 40% 98%;
 
-    --border: 215 16.3% 26.9%;              /* #334155 - Slate 700 */
+    --border: 215 16.3% 26.9%;
+    /* #334155 - Slate 700 */
     --input: 215 16.3% 26.9%;
-    --ring: 263.4 70% 50.4%;                /* Violet for focus rings */
+    --ring: 263.4 70% 50.4%;
+    /* Violet for focus rings */
 
-    --radius: 0.5rem;                       /* 8px */
+    --radius: 0.5rem;
+    /* 8px */
 
     /* Additional semantic colors */
-    --success: 142.1 76.2% 36.3%;           /* #10b981 - Emerald 500 */
-    --warning: 37.7 92.1% 50.2%;            /* #f59e0b - Amber 500 */
+    --success: 142.1 76.2% 36.3%;
+    /* #10b981 - Emerald 500 */
+    --warning: 37.7 92.1% 50.2%;
+    /* #f59e0b - Amber 500 */
   }
 
   .light {
     /* Light Mode Overrides - Improved Contrast */
-    --background: 0 0% 98%;                 /* #fafafa - Slightly off-white for less glare */
-    --foreground: 222.2 84% 4.9%;           /* #0f172a - Slate 900 (high contrast) */
+    --background: 0 0% 98%;
+    /* #fafafa - Slightly off-white for less glare */
+    --foreground: 222.2 84% 4.9%;
+    /* #0f172a - Slate 900 (high contrast) */
 
-    --card: 0 0% 100%;                      /* #ffffff - White cards */
-    --card-foreground: 222.2 84% 4.9%;      /* #0f172a - Dark text on cards */
+    --card: 0 0% 100%;
+    /* #ffffff - White cards */
+    --card-foreground: 222.2 84% 4.9%;
+    /* #0f172a - Dark text on cards */
 
     --popover: 0 0% 100%;
     --popover-foreground: 222.2 84% 4.9%;
 
-    --primary: 263.4 70% 50.4%;             /* #8b5cf6 - Violet (good contrast) */
-    --primary-foreground: 0 0% 100%;        /* White text on primary */
+    --primary: 263.4 70% 50.4%;
+    /* #8b5cf6 - Violet (good contrast) */
+    --primary-foreground: 0 0% 100%;
+    /* White text on primary */
 
-    --secondary: 214.3 31.8% 91.4%;         /* #e2e8f0 - Slate 200 (lighter) */
-    --secondary-foreground: 222.2 84% 4.9%; /* #0f172a - Dark text */
+    --secondary: 214.3 31.8% 91.4%;
+    /* #e2e8f0 - Slate 200 (lighter) */
+    --secondary-foreground: 222.2 84% 4.9%;
+    /* #0f172a - Dark text */
 
-    --muted: 214.3 31.8% 91.4%;             /* #e2e8f0 - Slate 200 */
-    --muted-foreground: 215.4 16.3% 36.9%;  /* #475569 - Darker slate for better contrast */
+    --muted: 214.3 31.8% 91.4%;
+    /* #e2e8f0 - Slate 200 */
+    --muted-foreground: 215.4 16.3% 36.9%;
+    /* #475569 - Darker slate for better contrast */
 
-    --accent: 214.3 31.8% 91.4%;            /* #e2e8f0 - Slate 200 */
-    --accent-foreground: 222.2 84% 4.9%;    /* #0f172a - Dark text */
+    --accent: 214.3 31.8% 91.4%;
+    /* #e2e8f0 - Slate 200 */
+    --accent-foreground: 222.2 84% 4.9%;
+    /* #0f172a - Dark text */
 
-    --destructive: 0 84.2% 50.2%;           /* #dc2626 - Slightly darker red */
-    --destructive-foreground: 0 0% 100%;    /* White text */
+    --destructive: 0 84.2% 50.2%;
+    /* #dc2626 - Slightly darker red */
+    --destructive-foreground: 0 0% 100%;
+    /* White text */
 
-    --border: 214.3 31.8% 82.4%;            /* #cbd5e1 - Darker border for visibility */
-    --input: 214.3 31.8% 82.4%;             /* Darker input border */
-    --ring: 263.4 70% 50.4%;                /* Violet focus ring */
+    --border: 214.3 31.8% 82.4%;
+    /* #cbd5e1 - Darker border for visibility */
+    --input: 214.3 31.8% 82.4%;
+    /* Darker input border */
+    --ring: 263.4 70% 50.4%;
+    /* Violet focus ring */
+  }
+
+  /* Custom scrollbar for better aesthetics */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+  }
+
+  .dark ::-webkit-scrollbar-thumb {
+    background: #475569;
+  }
+}
+
+@layer components {
+  .drag-handle:hover {
+    cursor: grab;
+  }
+
+  .drag-handle:active {
+    cursor: grabbing;
   }
 }
 
@@ -78,7 +141,7 @@
   }
 
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-display antialiased;
     font-feature-settings: "rlig" 1, "calt" 1;
     transition: background-color 0.3s ease, color 0.3s ease;
   }
@@ -90,6 +153,7 @@
     opacity: 0;
     transform: translateY(5px);
   }
+
   to {
     opacity: 1;
     transform: translateY(0);
@@ -105,10 +169,12 @@
     transform: scale(0.95);
     box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.7);
   }
+
   70% {
     transform: scale(1);
     box-shadow: 0 0 0 10px rgba(139, 92, 246, 0);
   }
+
   100% {
     transform: scale(0.95);
     box-shadow: 0 0 0 0 rgba(139, 92, 246, 0);

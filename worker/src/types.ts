@@ -9,6 +9,7 @@ export interface Participant {
 export interface Task {
     id: string;
     title: string;
+    description?: string;
     votes: Record<string, string>;
     finalEstimate?: string | null;
 }
@@ -46,7 +47,7 @@ export type Action =
     | (BaseAction & { type: 'join'; name: string; role: ParticipantRole })
     | (BaseAction & { type: 'approve_join'; name: string })
     | (BaseAction & { type: 'reject_join'; name: string })
-    | (BaseAction & { type: 'add_task'; title: string })
+    | (BaseAction & { type: 'add_task'; title: string; description?: string })
     | (BaseAction & { type: 'select_task'; taskId: string })
     | (BaseAction & { type: 'cast_vote'; value: string })
     | (BaseAction & { type: 'start_voting'; durationSeconds: number })

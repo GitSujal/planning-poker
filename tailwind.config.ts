@@ -9,24 +9,26 @@ const config: Config = {
     './src/**/*.{ts,tsx}',
   ],
   theme: {
-    container: {
-      center: true,
-      padding: "2rem",
-      screens: {
-        "2xl": "1400px",
-      },
-    },
     extend: {
       colors: {
+        "primary": "#135bec",
+        "primary-hover": "#0f4bc2",
+        "background-light": "#f6f6f8",
+        "background-dark": "#101622",
+        "surface-light": "#ffffff",
+        "surface-dark": "#1e293b",
+        "text-main-light": "#0d121b",
+        "text-main-dark": "#f8fafc",
+        "text-sub-light": "#4c669a",
+        "text-sub-dark": "#94a3b8",
+        "border-light": "#e7ebf3",
+        "border-dark": "#334155",
         border: "hsl(var(--border))",
         input: "hsl(var(--input))",
         ring: "hsl(var(--ring))",
         background: "hsl(var(--background))",
         foreground: "hsl(var(--foreground))",
-        primary: {
-          DEFAULT: "hsl(var(--primary))",
-          foreground: "hsl(var(--primary-foreground))",
-        },
+        // Keep existing shadcn/ui colors for compatibility
         secondary: {
           DEFAULT: "hsl(var(--secondary))",
           foreground: "hsl(var(--secondary-foreground))",
@@ -52,10 +54,19 @@ const config: Config = {
           foreground: "hsl(var(--card-foreground))",
         },
       },
+      fontFamily: {
+        "display": ["Inter", "sans-serif"],
+        "sans": ["Inter", "sans-serif"], // Default sans to Inter
+      },
       borderRadius: {
-        lg: "var(--radius)",
-        md: "calc(var(--radius) - 2px)",
-        sm: "calc(var(--radius) - 4px)",
+        lg: "0.5rem",
+        md: "calc(0.5rem - 2px)",
+        sm: "calc(0.5rem - 4px)",
+        xl: "0.75rem",
+        full: "9999px"
+      },
+      boxShadow: {
+        'soft': '0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.025)',
       },
       keyframes: {
         "accordion-down": {
@@ -73,7 +84,10 @@ const config: Config = {
       },
     },
   },
-  plugins: [],
+  plugins: [
+    require("tailwindcss-animate"),
+    require('@tailwindcss/container-queries')
+  ],
 }
 
 export default config
