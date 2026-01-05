@@ -1,0 +1,23 @@
+name = "vibe-planning-poker-worker"
+main = "src/index.ts"
+compatibility_date = "2026-01-05"
+
+[[durable_objects.bindings]]
+name = "GAME_ROOM"
+class_name = "GameRoom"
+
+[[migrations]]
+tag = "v1"
+new_classes = ["GameRoom"]
+
+[observability]
+enabled = true
+
+# Environment variables (set via dashboard or wrangler secret)
+[vars]
+# ALLOWED_ORIGINS = "https://your-domain.com,https://www.your-domain.com"
+# RATE_LIMIT_CREATE = "5"  # Sessions per IP per minute
+
+# For production deployment:
+# wrangler secret put ALLOWED_ORIGINS
+# wrangler secret put RATE_LIMIT_CREATE

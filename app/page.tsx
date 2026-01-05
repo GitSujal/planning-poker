@@ -2,6 +2,11 @@
 
 import { useRouter } from 'next/navigation';
 import { useState, useEffect } from 'react';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Moon, Sun } from 'lucide-react';
 
 export default function Home() {
   const router = useRouter();
@@ -21,7 +26,16 @@ export default function Home() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
+  const toggleTheme = () => {
+    setTheme(prev => prev === 'light' ? 'dark' : 'light');
+  };
+
   const createSession = async () => {
+    if (!hostName.trim()) {
+      setError('Please enter your name');
+      return;
+    }
+
     setLoading(true);
     setError('');
     try {
@@ -44,32 +58,77 @@ export default function Home() {
   };
 
   return (
-    <main className="container">
-      <div className="flex" style={{ justifyContent: 'space-between', alignItems: 'center' }}>
-        <h1>Vibe Planning Poker</h1>
-        <button onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>
-          Theme: {theme === 'light' ? 'Light' : 'Dark'}
-        </button>
+    <main className="min-h-screen flex flex-col items-center justify-center p-4">
+      <div className="absolute top-4 right-4 animate-fade-in">
+        <Button onClick={toggleTheme} variant="ghost" size="icon">
+          {theme === 'light' ? <Moon className="h-5 w-5" /> : <Sun className="h-5 w-5" />}
+        </Button>
       </div>
-      <div className="card grid" style={{ maxWidth: 520 }}>
-        <h2>Create a session</h2>
-        <label>
-          Host name
-          <input value={hostName} onChange={(e) => setHostName(e.target.value)} placeholder="Your name" />
-        </label>
-        <label>
-          Session type
-          <select value={sessionMode} onChange={(e) => setSessionMode(e.target.value as 'open' | 'closed')}>
-            <option value="open">Open session</option>
-            <option value="closed">Closed (host approval)</option>
-          </select>
-        </label>
-        {error && <p style={{ color: 'salmon' }}>{error}</p>}
-        <button disabled={!hostName || loading} onClick={createSession}>
-          {loading ? 'Creating...' : 'Create session'}
-        </button>
-      </div>
-      <p style={{ marginTop: '1rem', opacity: 0.8 }}>Sessions sync via R2 JSON and client polling.</p>
+
+      <Card className="w-full max-w-md animate-fade-in">
+        <CardHeader className="text-center">
+          <CardTitle className="text-4xl bg-gradient-to-r from-violet-400 to-fuchsia-400 bg-clip-text text-transparent">
+            Vibe Poker
+          </CardTitle>
+          <CardDescription>Sync-free collaborative estimation</CardDescription>
+        </CardHeader>
+
+        <CardContent className="space-y-4">
+          <div className="space-y-2">
+            <Label htmlFor="hostName">Host Name</Label>
+            <Input
+              id="hostName"
+              value={hostName}
+              onChange={(e) => setHostName(e.target.value)}
+              placeholder="Enter your name"
+              autoFocus
+              onKeyDown={(e) => e.key === 'Enter' && createSession()}
+            />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="sessionMode">Session Type</Label>
+            <div className="grid grid-cols-2 gap-2">
+              <Button
+                variant={sessionMode === 'open' ? 'default' : 'outline'}
+                onClick={() => setSessionMode('open')}
+                type="button"
+              >
+                🌍 Open
+              </Button>
+              <Button
+                variant={sessionMode === 'closed' ? 'default' : 'outline'}
+                onClick={() => setSessionMode('closed')}
+                type="button"
+              >
+                🔒 Closed
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground text-center">
+              {sessionMode === 'open' ? 'Anyone with the link can join instantly.' : 'New participants require host approval.'}
+            </p>
+          </div>
+
+          {error && (
+            <div className="p-3 bg-destructive/10 border border-destructive/20 text-destructive rounded-md text-sm text-center">
+              {error}
+            </div>
+          )}
+
+          <Button
+            disabled={loading}
+            onClick={createSession}
+            size="lg"
+            className="w-full"
+          >
+            {loading ? 'Creating Session...' : 'Start New Session'}
+          </Button>
+        </CardContent>
+      </Card>
+
+      <p className="fixed bottom-4 text-xs text-muted-foreground opacity-50">
+        Powered by Next.js & Cloudflare Durable Objects
+      </p>
     </main>
   );
 }
