@@ -6,3 +6,4 @@ out
 .env
 .tmp-sessions
 .wrangler
+.env.*

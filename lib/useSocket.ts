@@ -18,7 +18,7 @@ export function useSocket<T>(
     });
 
     const wsRef = useRef<WebSocket | null>(null);
-    const reconnectTimeoutRef = useRef<NodeJS.Timeout>();
+    const reconnectTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
     const onMessageRef = useRef(onMessage);
     useEffect(() => {

@@ -358,3 +358,46 @@ export function formatDistribution(votes: Record<string, string>) {
     });
     return dist;
 }
+
+/**
+ * Sanitize session state for transport, masking votes if not revealed.
+ * Also masks hostToken for non-hosts.
+ */
+export function sanitizeSession(state: SessionState, clientName?: string): SessionState {
+    const isHost = clientName === state.host.name;
+    const isRevealed = state.voting.status === 'revealed' || state.status === 'ended';
+
+    // Deep clone to avoid modifying original state
+    const clean = JSON.parse(JSON.stringify(state));
+
+    // NEVER mask host token if the current client is the host
+    // or if we are in an initial connection context where the client might be the host
+    if (!isHost && clientName !== undefined) {
+        delete (clean.host as any).hostToken;
+    }
+
+    clean.tasks.forEach((task: any) => {
+        const isTaskActive = task.id === state.activeTaskId;
+        const taskHasVotes = Object.keys(task.votes).length > 0;
+
+        // Reveal votes for a task if:
+        // 1. Global status is revealed/ended
+        // 2. It's a non-active task with votes (backlog history)
+        // 3. It's the active task but voting is idle (we just navigated back to it or haven't started yet)
+        const showVotesForThisTask = isRevealed || (!isTaskActive && taskHasVotes) || (isTaskActive && state.voting.status === 'idle' && taskHasVotes);
+
+        const masked: Record<string, string> = {};
+        Object.entries(task.votes).forEach(([name, value]) => {
+            // Keep the vote if it's the client's own vote or if it's revealed for this task
+            if (name === clientName || showVotesForThisTask) {
+                masked[name] = value as string;
+            } else {
+                // Return a marker that they voted
+                masked[name] = 'voted';
+            }
+        });
+        task.votes = masked;
+    });
+
+    return clean;
+}

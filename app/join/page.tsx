@@ -1,15 +1,40 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect, Suspense, useRef } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { ThemeToggle } from '@/components/ThemeToggle';
 
-export default function JoinSession() {
+function JoinSessionContent() {
     const [sessionId, setSessionId] = useState('');
     const [displayName, setDisplayName] = useState('');
     const [error, setError] = useState('');
     const navigate = useRouter();
+    const searchParams = useSearchParams();
+    const nameInputRef = useRef<HTMLInputElement>(null);
+    const sessionInputRef = useRef<HTMLInputElement>(null);
+
+    useEffect(() => {
+        const id = searchParams.get('id');
+        if (id) {
+            setSessionId(id);
+            // Focus name input if session ID is provided
+            setTimeout(() => {
+                nameInputRef.current?.focus();
+            }, 100);
+        } else {
+            // Focus session input if no ID is provided
+            setTimeout(() => {
+                sessionInputRef.current?.focus();
+            }, 100);
+        }
+        
+        // Also pre-fill display name if it exists in localStorage
+        const savedName = localStorage.getItem('displayName');
+        if (savedName) {
+            setDisplayName(savedName);
+        }
+    }, [searchParams]);
 
     const handleJoin = () => {
         if (!sessionId.trim()) {
@@ -40,7 +65,7 @@ export default function JoinSession() {
         localStorage.setItem('role', 'voter'); // Default role
 
         // Redirect
-        navigate.push(`/session/${targetId}`);
+        navigate.push(`/session?id=${targetId}`);
     };
 
     return (
@@ -72,13 +97,18 @@ export default function JoinSession() {
                                     <span className="material-symbols-outlined text-[20px]">link</span>
                                 </div>
                                 <input
-                                    autoFocus
+                                    ref={sessionInputRef}
                                     className="flex w-full min-w-0 resize-none overflow-hidden rounded-lg text-text-main-light dark:text-text-main-dark focus:outline-0 focus:ring-2 focus:ring-primary/20 border border-border-light dark:border-border-dark bg-background-light dark:bg-background-dark focus:border-primary h-12 pl-10 pr-4 placeholder:text-text-sub-light dark:placeholder:text-text-sub-dark text-base font-normal leading-normal transition-all"
                                     id="session-code"
                                     placeholder="e.g., https://poker.app/session/123 or 123-456"
                                     type="text"
                                     value={sessionId}
                                     onChange={(e) => setSessionId(e.target.value)}
+                                    onKeyDown={(e) => {
+                                        if (e.key === 'Enter' && sessionId.trim()) {
+                                            nameInputRef.current?.focus();
+                                        }
+                                    }}
                                 />
                             </div>
                         </div>
@@ -95,13 +125,18 @@ export default function JoinSession() {
                                         <span className="material-symbols-outlined text-[20px]">person</span>
                                     </div>
                                     <input
+                                        ref={nameInputRef}
                                         className="flex w-full min-w-0 resize-none overflow-hidden rounded-lg text-text-main-light dark:text-text-main-dark focus:outline-0 focus:ring-2 focus:ring-primary/20 border border-border-light dark:border-border-dark bg-background-light dark:bg-background-dark focus:border-primary h-12 pl-10 pr-4 placeholder:text-text-sub-light dark:placeholder:text-text-sub-dark text-base font-normal leading-normal transition-all"
                                         id="user-name"
                                         type="text"
-                                        defaultValue=""
                                         placeholder="Anonymous"
                                         value={displayName}
                                         onChange={(e) => setDisplayName(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter' && displayName.trim() && sessionId.trim()) {
+                                                handleJoin();
+                                            }
+                                        }}
                                     />
                                 </div>
                             </div>
@@ -116,5 +151,13 @@ export default function JoinSession() {
                 </div>
             </main>
         </div>
+    );
+}
+
+export default function JoinSession() {
+    return (
+        <Suspense fallback={<div className="min-h-screen bg-background-light dark:bg-background-dark flex items-center justify-center">Loading...</div>}>
+            <JoinSessionContent />
+        </Suspense>
     );
 }

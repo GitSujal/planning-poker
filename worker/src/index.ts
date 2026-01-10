@@ -1,4 +1,4 @@
-import { applyAction, createInitialSession, generateSessionId } from "./logic";
+import { applyAction, createInitialSession, generateSessionId, sanitizeSession } from "./logic";
 import { SessionState, SessionResponse } from "./types";
 
 export interface Env {
@@ -33,9 +33,38 @@ function getClientIP(request: Request): string {
         || 'unknown';
 }
 
+function handleCors(request: Request, env: Env) {
+    const origin = request.headers.get('Origin');
+    const allowedOrigins = env.ALLOWED_ORIGINS?.split(',').map(o => o.trim()) || [];
+    
+    // In development or if no origin (not a browser), or if origin is allowed
+    const isAllowed = !origin || 
+                      allowedOrigins.length === 0 || 
+                      allowedOrigins.includes(origin) ||
+                      (origin.startsWith('http://localhost') && !env.ALLOWED_ORIGINS);
+
+    if (isAllowed && origin) {
+        return {
+            'Access-Control-Allow-Origin': origin,
+            'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+            'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+            'Access-Control-Max-Age': '86400',
+        };
+    }
+    return {};
+}
+
 export default {
     async fetch(request: Request, env: Env) {
         const url = new URL(request.url);
+        const corsHeaders = handleCors(request, env);
+
+        // Handle CORS preflight
+        if (request.method === "OPTIONS") {
+            return new Response(null, {
+                headers: corsHeaders
+            });
+        }
 
         // Create new session endpoint
         if (url.pathname === "/create" && request.method === "POST") {
@@ -44,7 +73,10 @@ export default {
             const rateLimit = parseInt(env.RATE_LIMIT_CREATE || '5');
 
             if (!checkRateLimit(clientIP, rateLimit)) {
-                return new Response('Rate limit exceeded. Please try again later.', { status: 429 });
+                return new Response('Rate limit exceeded. Please try again later.', { 
+                    status: 429,
+                    headers: corsHeaders
+                });
             }
 
             try {
@@ -52,11 +84,17 @@ export default {
 
                 // Validate input
                 if (!body.hostName || typeof body.hostName !== 'string') {
-                    return new Response('Invalid host name', { status: 400 });
+                    return new Response('Invalid host name', { 
+                        status: 400,
+                        headers: corsHeaders
+                    });
                 }
 
                 if (body.sessionMode !== 'open' && body.sessionMode !== 'closed') {
-                    return new Response('Invalid session mode', { status: 400 });
+                    return new Response('Invalid session mode', { 
+                        status: 400,
+                        headers: corsHeaders
+                    });
                 }
 
                 const sessionId = generateSessionId();
@@ -69,33 +107,55 @@ export default {
                     body: JSON.stringify({ ...body, sessionId })
                 }));
 
-                return initResponse;
+                // Clone the response to add CORS headers
+                const response = new Response(initResponse.body, initResponse);
+                Object.entries(corsHeaders).forEach(([k, v]) => response.headers.set(k, v));
+                return response;
             } catch (error: any) {
                 console.error('[Worker] Create session error:', error);
-                return new Response(error.message || 'Failed to create session', { status: 500 });
+                return new Response(error.message || 'Failed to create session', { 
+                    status: 500,
+                    headers: corsHeaders
+                });
             }
         }
 
         // WebSocket connection endpoint
         const roomName = url.searchParams.get("room");
         if (!roomName) {
-            return new Response("Room ID required", { status: 400 });
+            return new Response("Room ID required", { 
+                status: 400,
+                headers: corsHeaders
+            });
         }
 
         // Validate session ID format (basic check)
         if (!/^[a-f0-9-]{8,}$/.test(roomName)) {
-            return new Response("Invalid room ID format", { status: 400 });
+            return new Response("Invalid room ID format", { 
+                status: 400,
+                headers: corsHeaders
+            });
         }
 
         const id = env.GAME_ROOM.idFromName(roomName);
         const room = env.GAME_ROOM.get(id);
-        return room.fetch(request);
+        const response = await room.fetch(request);
+
+        // Add CORS headers to non-WebSocket responses
+        if (response.status !== 101) {
+            const corsRes = new Response(response.body, response);
+            Object.entries(corsHeaders).forEach(([k, v]) => corsRes.headers.set(k, v));
+            return corsRes;
+        }
+
+        return response;
     }
 };
 
 export class GameRoom {
     private sessionInactivityTimeout = 7 * 24 * 60 * 60 * 1000; // 7 days in ms
     private hibernationTimeout = 60 * 60 * 1000; // 1 hour in ms
+    private sessionsMap = new Map<WebSocket, string>();
 
     constructor(private state: DurableObjectState, private env: Env) { }
 
@@ -162,7 +222,8 @@ export class GameRoom {
             // Send current session state immediately upon connection
             const session = await this.state.storage.get<SessionState>("session");
             if (session) {
-                server.send(JSON.stringify(session));
+                // Since we just connected, we don't have a name yet
+                server.send(JSON.stringify(sanitizeSession(session)));
             }
 
             // Reset inactivity timer since we have an active connection
@@ -201,6 +262,11 @@ export class GameRoom {
             const nextState = applyAction(session, action);
             await this.state.storage.put("session", nextState);
 
+            // Associate name with WebSocket for secure state sanitization
+            if (action.type === 'join' && action.name) {
+                this.sessionsMap.set(ws, action.name);
+            }
+
             // Broadcast to all connected clients
             this.broadcast(nextState);
 
@@ -212,6 +278,7 @@ export class GameRoom {
 
     async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
         console.log('[GameRoom] WebSocket closed:', { code, reason, wasClean });
+        this.sessionsMap.delete(ws);
 
         // If no more connections, set shorter cleanup alarm
         const connections = this.state.getWebSockets();
@@ -275,11 +342,12 @@ export class GameRoom {
         console.log('[GameRoom] Session terminated:', reason);
     }
 
-    private broadcast(message: any) {
-        const msgString = JSON.stringify(message);
+    private broadcast(session: SessionState) {
         this.state.getWebSockets().forEach(ws => {
             try {
-                ws.send(msgString);
+                const userName = this.sessionsMap.get(ws);
+                const sanitized = sanitizeSession(session, userName);
+                ws.send(JSON.stringify(sanitized));
             } catch (e) {
                 console.error('[GameRoom] Error broadcasting to client:', e);
             }

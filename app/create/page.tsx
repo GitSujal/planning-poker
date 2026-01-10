@@ -4,6 +4,7 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { config } from '@/lib/config';
 
 interface TaskWithDescription {
     title: string;
@@ -61,15 +62,23 @@ export default function CreateSession() {
         setLoading(true);
         setError('');
         try {
-            const res = await fetch('/api/session/create', {
+            const res = await fetch(`${config.workerUrl}/create`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ hostName, sessionMode: 'open' })
             });
 
-            if (!res.ok) throw new Error('Unable to create session');
+            if (!res.ok) {
+                const errorData = await res.text();
+                throw new Error(errorData || 'Unable to create session');
+            }
 
             const data = await res.json();
+            const sessionId = data.session?.sessionId;
+
+            if (!sessionId) {
+                throw new Error('Invalid response from worker');
+            }
 
             // Set session persistence
             document.cookie = `hostToken=${data.hostToken}; path=/`;
@@ -78,10 +87,10 @@ export default function CreateSession() {
 
             // Store tasks for the new session
             if (tasks.length > 0) {
-                localStorage.setItem(`pendingTasks_${data.sessionId}`, JSON.stringify(tasks));
+                localStorage.setItem(`pendingTasks_${sessionId}`, JSON.stringify(tasks));
             }
 
-            navigate.push(`/session/${data.sessionId}`);
+            navigate.push(`/session?id=${sessionId}`);
         } catch (e: any) {
             setError(e.message);
         } finally {

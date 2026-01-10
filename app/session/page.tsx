@@ -1,7 +1,9 @@
 'use client';
 
-import { useEffect, useMemo, useState, useRef, useCallback } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+export const dynamic = 'force-static';
+
+import { useEffect, useMemo, useState, useRef, useCallback, Suspense } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { Action, ParticipantRole, SessionState } from '@/lib/types';
 import { calculateStats, formatDistribution } from '@/lib/session';
@@ -9,8 +11,6 @@ import { getHostToken, setHostToken } from '@/lib/cookies';
 import { storage } from '@/lib/storage';
 import QRCode from 'qrcode';
 import { ThemeToggle } from '@/components/ThemeToggle';
-// Removed component imports that we will replace/inline or are not needed for new UI
-// Keeping purely functional imports
 import { useSocket } from '@/lib/useSocket';
 
 const deck = ['0', '1', '2', '3', '5', '8', '13', '21', '34', '55', '89', '?', '☕'];
@@ -20,10 +20,10 @@ function saveIdentity(name: string, role: ParticipantRole) {
   storage.setItem('role', role);
 }
 
-export default function SessionPage() {
-  const params = useParams<{ id: string }>();
+function SessionContent() {
   const router = useRouter();
-  const sessionId = params?.id;
+  const searchParams = useSearchParams();
+  const sessionId = searchParams.get('id');
 
   // Data State
   const [session, setSession] = useState<SessionState | null>(null);
@@ -44,10 +44,11 @@ export default function SessionPage() {
   const [newTaskTitle, setNewTaskTitle] = useState('');
   const [newTaskDescription, setNewTaskDescription] = useState('');
   const [showTaskModal, setShowTaskModal] = useState(false);
+  const [showEndSessionModal, setShowEndSessionModal] = useState(false);
   const [expandedDescription, setExpandedDescription] = useState(false);
 
   // Optimistic update timeout ref
-  const optimisticTimeoutRef = useRef<NodeJS.Timeout>();
+  const optimisticTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
   // Load saved identity
   useEffect(() => {
@@ -128,6 +129,13 @@ export default function SessionPage() {
   const hasJoined = displaySession && !!displaySession.participants[displayName];
   const pendingApproval = displaySession && !!displaySession.joinRequests[displayName];
 
+  // Auto-join if identity is known and connected
+  useEffect(() => {
+    if (isConnected && !loading && displaySession && displayName && !hasJoined && !pendingApproval && !joinError) {
+      joinSession();
+    }
+  }, [isConnected, loading, displaySession, displayName, hasJoined, pendingApproval, joinError, joinSession]);
+
   // Vote value logic
   const myVote = displaySession && displayName
     ? displaySession.tasks.find(t => t.id === displaySession.activeTaskId)?.votes?.[displayName]
@@ -166,7 +174,7 @@ export default function SessionPage() {
   // Generate QR code for session join link
   useEffect(() => {
     if (typeof window !== 'undefined' && sessionId) {
-      const joinUrl = `${window.location.origin}/session/${sessionId}`;
+      const joinUrl = `${window.location.origin}/session?id=${sessionId}`;
       QRCode.toDataURL(joinUrl, { width: 200, margin: 2 })
         .then(setQrCodeUrl)
         .catch(console.error);
@@ -185,6 +193,7 @@ export default function SessionPage() {
       name,
       role: p.role,
       hasVoted: activeTask?.votes[name] !== undefined,
+      vote: activeTask?.votes[name],
       isHost: session?.host.name === name
     }));
   }, [displaySession, activeTask, session]);
@@ -229,6 +238,167 @@ export default function SessionPage() {
     }
   }, [newTaskTitle, newTaskDescription, sendAction]);
 
+  const renderTaskModal = () => {
+    if (!showTaskModal) return null;
+    return (
+      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => {
+        setShowTaskModal(false);
+        setNewTaskTitle('');
+        setNewTaskDescription('');
+      }}>
+        <div className="bg-surface-light dark:bg-surface-dark rounded-xl shadow-2xl border border-border-light dark:border-border-dark w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
+          <div className="p-6 border-b border-border-light dark:border-border-dark">
+            <h2 className="text-2xl font-bold text-text-main-light dark:text-text-main-dark">Add New Task</h2>
+            <p className="text-sm text-text-sub-light dark:text-text-sub-dark mt-1">Create a new task for the team to estimate</p>
+          </div>
+          <div className="p-6 space-y-4">
+            <div>
+              <label className="block text-sm font-semibold text-text-main-light dark:text-text-main-dark mb-2">
+                Task Title <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                value={newTaskTitle}
+                onChange={(e) => setNewTaskTitle(e.target.value)}
+                placeholder="e.g., Implement user authentication"
+                className="w-full px-4 py-3 rounded-lg border border-border-light dark:border-border-dark bg-background-light dark:bg-background-dark text-text-main-light dark:text-text-main-dark focus:outline-none focus:ring-2 focus:ring-primary"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && !e.shiftKey) {
+                    e.preventDefault();
+                    handleAddTask();
+                  } else if (e.key === 'Escape') {
+                    setShowTaskModal(false);
+                    setNewTaskTitle('');
+                    setNewTaskDescription('');
+                  }
+                }}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-text-main-light dark:text-text-main-dark mb-2">
+                Description <span className="text-text-sub-light text-xs">(Optional)</span>
+              </label>
+              <textarea
+                value={newTaskDescription}
+                onChange={(e) => setNewTaskDescription(e.target.value)}
+                placeholder="Add any additional context or requirements..."
+                rows={4}
+                className="w-full px-4 py-3 rounded-lg border border-border-light dark:border-border-dark bg-background-light dark:bg-background-dark text-text-main-light dark:text-text-main-dark focus:outline-none focus:ring-2 focus:ring-primary resize-none"
+                onKeyDown={(e) => {
+                  if (e.key === 'Escape') {
+                    setShowTaskModal(false);
+                    setNewTaskTitle('');
+                    setNewTaskDescription('');
+                  }
+                }}
+              />
+            </div>
+          </div>
+          <div className="p-6 border-t border-border-light dark:border-border-dark flex gap-3 justify-end">
+            <button
+              onClick={() => {
+                setShowTaskModal(false);
+                setNewTaskTitle('');
+                setNewTaskDescription('');
+              }}
+              className="px-6 py-2.5 rounded-lg border border-border-light dark:border-border-dark text-text-main-light dark:text-text-main-dark font-medium hover:bg-background-light dark:hover:bg-background-dark transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleAddTask}
+              disabled={!newTaskTitle.trim()}
+              className="px-6 py-2.5 rounded-lg bg-primary text-white font-bold hover:bg-primary-hover shadow-lg shadow-primary/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Add Task
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderParticipantsList = () => (
+    <div className="rounded-xl p-6 border border-border-light dark:border-border-dark bg-surface-light dark:bg-surface-dark shadow-sm">
+      <div className="flex items-center justify-between mb-6">
+        <h3 className="text-xl font-bold text-text-main-light dark:text-text-main-dark flex items-center gap-2">
+          <span className="material-symbols-outlined text-primary">groups</span>
+          Participants
+        </h3>
+        <span className="bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1">
+          <span className="size-2 rounded-full bg-green-500 animate-pulse"></span>
+          {votedCount}/{totalVoters} Voted
+        </span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+        {participantsList.map((p) => (
+          <div key={p.name} className={`flex items-center gap-3 p-3 rounded-lg border ${p.hasVoted ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800/30' : 'bg-surface-light dark:bg-surface-dark border-border-light dark:border-border-dark'}`}>
+            <div className="relative">
+              <div className="size-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm uppercase">
+                {p.name.substring(0, 2)}
+              </div>
+              {p.hasVoted && (
+                <div className="absolute -bottom-1 -right-1 bg-green-500 rounded-full p-0.5 border-2 border-white dark:border-surface-dark">
+                  <span className="material-symbols-outlined text-white text-[12px] block">check</span>
+                </div>
+              )}
+              {!p.hasVoted && displaySession?.voting.status === 'open' && (
+                <div className="absolute -bottom-1 -right-1 bg-yellow-400 rounded-full p-0.5 border-2 border-white dark:border-surface-dark animate-pulse">
+                  <span className="material-symbols-outlined text-white text-[12px] block">more_horiz</span>
+                </div>
+              )}
+            </div>
+            <div className="flex flex-col">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-bold text-text-main-light dark:text-text-main-dark">{p.name} {p.name === displayName ? '(You)' : ''}</span>
+                {displaySession?.voting.status === 'revealed' && p.vote && (
+                  <span className="bg-primary/20 text-primary text-[10px] font-bold px-1.5 py-0.5 rounded border border-primary/30 animate-in zoom-in duration-300">
+                    {p.vote}
+                  </span>
+                )}
+              </div>
+              <span className="text-xs text-text-sub-light dark:text-text-sub-dark font-medium">{p.hasVoted ? 'Voted' : (displaySession?.voting.status === 'idle' ? 'Ready' : 'Thinking...')}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  const renderEndSessionModal = () => {
+    if (!showEndSessionModal) return null;
+    return (
+      <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[60] flex items-center justify-center p-4" onClick={() => setShowEndSessionModal(false)}>
+        <div className="bg-surface-light dark:bg-surface-dark rounded-xl shadow-2xl border border-border-light dark:border-border-dark w-full max-w-md p-6 flex flex-col gap-6" onClick={(e) => e.stopPropagation()}>
+          <div className="flex flex-col gap-2">
+            <h2 className="text-2xl font-bold text-text-main-light dark:text-text-main-dark">End Session?</h2>
+            <p className="text-text-sub-light dark:text-text-sub-dark">
+              This will complete the session and show the final summary to all participants. This action cannot be undone.
+            </p>
+          </div>
+          <div className="flex gap-3 justify-end">
+            <button
+              onClick={() => setShowEndSessionModal(false)}
+              className="px-6 py-2.5 rounded-lg border border-border-light dark:border-border-dark text-text-main-light dark:text-text-main-dark font-medium hover:bg-background-light dark:hover:bg-background-dark transition-colors"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => {
+                sendAction({ type: 'end_session' });
+                setShowEndSessionModal(false);
+              }}
+              className="px-6 py-2.5 rounded-lg bg-red-500 text-white font-bold hover:bg-red-600 shadow-lg shadow-red-500/20 transition-all"
+            >
+              End Session
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // Helper function to export data as CSV
   const exportToCSV = useCallback(() => {
     if (!displaySession) return;
@@ -269,6 +439,18 @@ export default function SessionPage() {
   }, [displaySession]);
 
   // --- RENDER HELPERS ---
+
+  if (!sessionId) {
+    return (
+      <div className="flex h-screen w-full items-center justify-center bg-background-light dark:bg-background-dark p-4">
+        <div className="text-center">
+          <h1 className="text-xl font-bold text-red-500 mb-2">Error</h1>
+          <p className="text-text-sub-light mb-4">No Session ID provided.</p>
+          <Link href="/join" className="px-4 py-2 bg-primary text-white rounded-lg">Return to Join</Link>
+        </div>
+      </div>
+    );
+  }
 
   if (loading && !displaySession) {
     return (
@@ -316,6 +498,11 @@ export default function SessionPage() {
                 onChange={(e) => setDisplayName(e.target.value)}
                 placeholder="Enter your name"
                 autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && displayName.trim()) {
+                    joinSession();
+                  }
+                }}
               />
             </div>
             {joinError && <div className="text-red-500 text-sm bg-red-50 dark:bg-red-900/20 p-2 rounded">{joinError}</div>}
@@ -405,14 +592,14 @@ export default function SessionPage() {
                       <div className="flex gap-2">
                         <input
                           type="text"
-                          value={typeof window !== 'undefined' ? `${window.location.origin}/session/${sessionId}` : ''}
+                          value={typeof window !== 'undefined' ? `${window.location.origin}/session?id=${sessionId}` : ''}
                           readOnly
                           className="flex-1 px-3 py-2 text-xs rounded-lg border border-border-light dark:border-border-dark bg-background-light dark:bg-background-dark font-mono"
                         />
                         <button
                           onClick={() => {
                             if (typeof window !== 'undefined') {
-                              navigator.clipboard.writeText(`${window.location.origin}/session/${sessionId}`);
+                              navigator.clipboard.writeText(`${window.location.origin}/session?id=${sessionId}`);
                             }
                           }}
                           className="px-3 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors"
@@ -580,7 +767,7 @@ export default function SessionPage() {
                         <span>Export CSV</span>
                       </button>
                       <button
-                        onClick={() => { if (confirm("End session? This will show the final summary.")) sendAction({ type: 'end_session' }) }}
+                        onClick={() => setShowEndSessionModal(true)}
                         className="flex-1 sm:flex-none px-6 py-2.5 border-2 border-red-500 text-red-500 rounded-lg font-bold hover:bg-red-50 dark:hover:bg-red-900/20 flex items-center justify-center gap-2"
                       >
                         <span className="material-symbols-outlined text-[20px]">power_settings_new</span>
@@ -591,88 +778,12 @@ export default function SessionPage() {
                 </div>
               </div>
             )}
+            {renderParticipantsList()}
           </div>
         </main>
         </div>
-
-        {/* Add Task Modal */}
-        {showTaskModal && (
-          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => {
-            setShowTaskModal(false);
-            setNewTaskTitle('');
-            setNewTaskDescription('');
-          }}>
-            <div className="bg-surface-light dark:bg-surface-dark rounded-xl shadow-2xl border border-border-light dark:border-border-dark w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-              <div className="p-6 border-b border-border-light dark:border-border-dark">
-                <h2 className="text-2xl font-bold text-text-main-light dark:text-text-main-dark">Add New Task</h2>
-                <p className="text-sm text-text-sub-light dark:text-text-sub-dark mt-1">Create a new task for the team to estimate</p>
-              </div>
-              <div className="p-6 space-y-4">
-                <div>
-                  <label className="block text-sm font-semibold text-text-main-light dark:text-text-main-dark mb-2">
-                    Task Title <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    value={newTaskTitle}
-                    onChange={(e) => setNewTaskTitle(e.target.value)}
-                    placeholder="e.g., Implement user authentication"
-                    className="w-full px-4 py-3 rounded-lg border border-border-light dark:border-border-dark bg-background-light dark:bg-background-dark text-text-main-light dark:text-text-main-dark focus:outline-none focus:ring-2 focus:ring-primary"
-                    autoFocus
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        handleAddTask();
-                      } else if (e.key === 'Escape') {
-                        setShowTaskModal(false);
-                        setNewTaskTitle('');
-                        setNewTaskDescription('');
-                      }
-                    }}
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-text-main-light dark:text-text-main-dark mb-2">
-                    Description <span className="text-text-sub-light text-xs">(Optional)</span>
-                  </label>
-                  <textarea
-                    value={newTaskDescription}
-                    onChange={(e) => setNewTaskDescription(e.target.value)}
-                    placeholder="Add any additional context or requirements..."
-                    rows={4}
-                    className="w-full px-4 py-3 rounded-lg border border-border-light dark:border-border-dark bg-background-light dark:bg-background-dark text-text-main-light dark:text-text-main-dark focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-                    onKeyDown={(e) => {
-                      if (e.key === 'Escape') {
-                        setShowTaskModal(false);
-                        setNewTaskTitle('');
-                        setNewTaskDescription('');
-                      }
-                    }}
-                  />
-                </div>
-              </div>
-              <div className="p-6 border-t border-border-light dark:border-border-dark flex gap-3 justify-end">
-                <button
-                  onClick={() => {
-                    setShowTaskModal(false);
-                    setNewTaskTitle('');
-                    setNewTaskDescription('');
-                  }}
-                  className="px-6 py-2.5 rounded-lg border border-border-light dark:border-border-dark text-text-main-light dark:text-text-main-dark font-medium hover:bg-background-light dark:hover:bg-background-dark transition-colors"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleAddTask}
-                  disabled={!newTaskTitle.trim()}
-                  className="px-6 py-2.5 rounded-lg bg-primary text-white font-bold hover:bg-primary-hover shadow-lg shadow-primary/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Add Task
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        {renderTaskModal()}
+        {renderEndSessionModal()}
       </div>
     );
   }
@@ -702,7 +813,6 @@ export default function SessionPage() {
                 <p className="text-sm font-bold text-text-sub-light uppercase">Total Tasks</p>
                 <p className="text-4xl font-bold mt-2">{displaySession?.tasks.length}</p>
               </div>
-              {/* Add more stats if available */}
             </div>
 
             {/* Tasks List */}
@@ -733,12 +843,21 @@ export default function SessionPage() {
               <Link href="/" className="px-6 py-3 bg-surface-light dark:bg-surface-dark border border-border-light dark:border-border-dark rounded-lg font-bold hover:bg-background-light transition-colors">
                 Back to Home
               </Link>
+              <button
+                onClick={exportToCSV}
+                className="px-6 py-3 bg-green-600 text-white rounded-lg font-bold hover:bg-green-700 shadow-lg flex items-center justify-center gap-2"
+              >
+                <span className="material-symbols-outlined text-[20px]">download</span>
+                <span>Export CSV</span>
+              </button>
               <Link href="/create" className="px-6 py-3 bg-primary text-white rounded-lg font-bold hover:bg-primary-hover shadow-lg">
                 New Session
               </Link>
             </div>
           </div>
         </main>
+        {renderTaskModal()}
+        {renderEndSessionModal()}
       </div>
     );
   }
@@ -806,14 +925,14 @@ export default function SessionPage() {
                     <div className="flex gap-2">
                       <input
                         type="text"
-                        value={typeof window !== 'undefined' ? `${window.location.origin}/session/${sessionId}` : ''}
+                        value={typeof window !== 'undefined' ? `${window.location.origin}/session?id=${sessionId}` : ''}
                         readOnly
                         className="flex-1 px-3 py-2 text-xs rounded-lg border border-border-light dark:border-border-dark bg-background-light dark:bg-background-dark font-mono"
                       />
                       <button
                         onClick={() => {
                           if (typeof window !== 'undefined') {
-                            navigator.clipboard.writeText(`${window.location.origin}/session/${sessionId}`);
+                            navigator.clipboard.writeText(`${window.location.origin}/session?id=${sessionId}`);
                           }
                         }}
                         className="px-3 py-2 bg-primary text-white rounded-lg hover:bg-primary-hover transition-colors"
@@ -863,7 +982,6 @@ export default function SessionPage() {
               <p className="text-center text-sm text-text-sub-light italic py-4">No tasks in backlog</p>
             )}
           </div>
-          {/* Add Task Input (Host only or Open) */}
           <div className="p-4 border-t border-border-light dark:border-border-dark">
             {(isHost || displaySession?.sessionMode === 'open') && (
               <button
@@ -926,23 +1044,70 @@ export default function SessionPage() {
                 {/* Voting Area */}
                 <div className="flex flex-col gap-6 mt-4">
                   {displaySession?.voting.status === 'idle' ? (
-                    <div className="flex flex-col items-center justify-center py-12 rounded-xl border-2 border-dashed border-border-light dark:border-border-dark bg-surface-light/50 dark:bg-surface-dark/50">
-                      {isHost ? (
-                        <div className="text-center space-y-4">
-                          <p className="text-text-sub-light dark:text-text-sub-dark">Task is selected. Start voting when ready.</p>
-                          <button
-                            onClick={() => sendAction({ type: 'start_voting', durationSeconds: 0 })}
-                            className="px-8 py-3 bg-primary text-white font-bold rounded-xl shadow-lg shadow-primary/20 hover:bg-primary-hover hover:scale-105 transition-all text-lg"
-                          >
-                            Start Voting
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="text-center space-y-2">
-                          <div className="size-12 border-4 border-border-light dark:border-border-dark border-t-primary rounded-full animate-spin mx-auto"></div>
-                          <p className="text-text-main-light dark:text-text-main-dark font-medium">Waiting for host to open voting...</p>
+                    <div className="flex flex-col gap-8">
+                      {activeTask && Object.keys(activeTask.votes).length > 0 && (
+                        <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-6">
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div className="flex flex-col gap-2 rounded-xl p-6 border border-border-light dark:border-border-dark bg-surface-light dark:bg-surface-dark shadow-sm">
+                              <div className="flex items-center gap-2 mb-1 text-text-sub-light dark:text-text-sub-dark">
+                                <span className="material-symbols-outlined text-primary">functions</span>
+                                <span className="text-sm font-medium uppercase tracking-wider">Average Vote</span>
+                              </div>
+                              <p className="text-5xl font-bold text-text-main-light dark:text-text-main-dark">{activeStats.average || '-'}</p>
+                            </div>
+                            <div className="flex flex-col gap-2 rounded-xl p-6 border border-border-light dark:border-border-dark bg-surface-light dark:bg-surface-dark shadow-sm">
+                              <div className="flex items-center gap-2 mb-1 text-text-sub-light dark:text-text-sub-dark">
+                                <span className="material-symbols-outlined text-primary">analytics</span>
+                                <span className="text-sm font-medium uppercase tracking-wider">Median Vote</span>
+                              </div>
+                              <p className="text-5xl font-bold text-text-main-light dark:text-text-main-dark">{activeStats.median || '-'}</p>
+                            </div>
+                          </div>
+
+                          <div className="rounded-xl p-6 border border-border-light dark:border-border-dark bg-surface-light dark:bg-surface-dark shadow-sm">
+                            <h3 className="text-xl font-bold text-text-main-light dark:text-text-main-dark mb-6">Previous Vote Distribution</h3>
+                            <div className="h-[200px] flex items-end justify-between gap-4">
+                              {Object.entries(formatDistribution(activeTask.votes)).map(([val, count]) => {
+                                const maxVotes = Math.max(...Object.values(formatDistribution(activeTask.votes)));
+                                const heightPct = maxVotes ? (count / maxVotes) * 100 : 0;
+                                return (
+                                  <div key={val} className="flex-1 flex flex-col items-center gap-2 h-full justify-end">
+                                    <div className="w-full bg-primary/10 rounded-t-md relative flex items-end justify-center overflow-hidden transition-all hover:bg-primary/20" style={{ height: `${heightPct}%`, minHeight: '24px' }}>
+                                      <div className="absolute inset-x-0 bottom-0 bg-primary opacity-80 h-full"></div>
+                                      <span className="relative z-10 text-white font-bold text-sm mb-1">{count}</span>
+                                    </div>
+                                    <span className="text-sm font-bold text-text-sub-light dark:text-text-sub-dark">{val}</span>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
                         </div>
                       )}
+
+                      <div className="flex flex-col items-center justify-center py-12 rounded-xl border-2 border-dashed border-border-light dark:border-border-dark bg-surface-light/50 dark:bg-surface-dark/50">
+                        {isHost ? (
+                          <div className="text-center space-y-4">
+                            <p className="text-text-sub-light dark:text-text-sub-dark">
+                              {Object.keys(activeTask.votes).length > 0
+                                ? "Results are shown above. You can start a new voting round."
+                                : "Task is selected. Start voting when ready."}
+                            </p>
+                            <button
+                              onClick={() => sendAction({ type: 'start_voting', durationSeconds: 0 })}
+                              className="px-8 py-3 bg-primary text-white font-bold rounded-xl shadow-lg shadow-primary/20 hover:bg-primary-hover hover:scale-105 transition-all text-lg flex items-center gap-2"
+                            >
+                              <span className="material-symbols-outlined">{Object.keys(activeTask.votes).length > 0 ? 'restart_alt' : 'play_arrow'}</span>
+                              {Object.keys(activeTask.votes).length > 0 ? 'Revote' : 'Start Voting'}
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="text-center space-y-2">
+                            <div className="size-12 border-4 border-border-light dark:border-border-dark border-t-primary rounded-full animate-spin mx-auto"></div>
+                            <p className="text-text-main-light dark:text-text-main-dark font-medium">Waiting for host to open voting...</p>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   ) : (
                     <>
@@ -976,44 +1141,12 @@ export default function SessionPage() {
                 </div>
 
                 <div className="mt-8">
-                  <div className="flex items-center justify-between mb-4">
-                    <h3 className="text-lg font-bold text-text-main-light dark:text-text-main-dark">Team Progress</h3>
-                    <span className="bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400 text-xs font-bold px-3 py-1 rounded-full flex items-center gap-1">
-                      <span className="size-2 rounded-full bg-green-500 animate-pulse"></span>
-                      {votedCount}/{totalVoters} Voted
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
-                    {participantsList.map((p) => (
-                      <div key={p.name} className={`flex items-center gap-3 p-3 rounded-lg border ${p.hasVoted ? 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800/30' : 'bg-surface-light dark:bg-surface-dark border-border-light dark:border-border-dark'}`}>
-                        <div className="relative">
-                          <div className="size-10 rounded-full bg-primary/10 flex items-center justify-center text-primary font-bold text-sm uppercase">
-                            {p.name.substring(0, 2)}
-                          </div>
-                          {p.hasVoted && (
-                            <div className="absolute -bottom-1 -right-1 bg-green-500 rounded-full p-0.5 border-2 border-white dark:border-surface-dark">
-                              <span className="material-symbols-outlined text-white text-[12px] block">check</span>
-                            </div>
-                          )}
-                          {!p.hasVoted && displaySession?.voting.status === 'open' && (
-                            <div className="absolute -bottom-1 -right-1 bg-yellow-400 rounded-full p-0.5 border-2 border-white dark:border-surface-dark animate-pulse">
-                              <span className="material-symbols-outlined text-white text-[12px] block">more_horiz</span>
-                            </div>
-                          )}
-                        </div>
-                        <div className="flex flex-col">
-                          <span className="text-sm font-bold text-text-main-light dark:text-text-main-dark">{p.name} {p.name === displayName ? '(You)' : ''}</span>
-                          <span className="text-xs text-text-sub-light dark:text-text-sub-dark font-medium">{p.hasVoted ? 'Voted' : (displaySession?.voting.status === 'idle' ? 'Ready' : 'Thinking...')}</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  {renderParticipantsList()}
                 </div>
               </>
             )}
           </div>
 
-          {/* Bottom Bar (Sticky) */}
           <div className="sticky bottom-0 w-full bg-surface-light dark:bg-surface-dark border-t border-border-light dark:border-border-dark p-4 shadow-lg z-20">
             <div className="max-w-5xl mx-auto flex items-center justify-between">
               <div className="hidden sm:block">
@@ -1036,7 +1169,7 @@ export default function SessionPage() {
                   </button>
                 )}
                 {isHost && (
-                  <button className="p-2 text-text-sub-light hover:text-red-500" title="End Session" onClick={() => { if (confirm("End session?")) sendAction({ type: 'end_session' }) }}>
+                  <button className="p-2 text-text-sub-light hover:text-red-500" title="End Session" onClick={() => setShowEndSessionModal(true)}>
                     <span className="material-symbols-outlined">power_settings_new</span>
                   </button>
                 )}
@@ -1046,85 +1179,16 @@ export default function SessionPage() {
         </main>
       </div>
 
-      {/* Add Task Modal */}
-      {showTaskModal && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4" onClick={() => {
-          setShowTaskModal(false);
-          setNewTaskTitle('');
-          setNewTaskDescription('');
-        }}>
-          <div className="bg-surface-light dark:bg-surface-dark rounded-xl shadow-2xl border border-border-light dark:border-border-dark w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
-            <div className="p-6 border-b border-border-light dark:border-border-dark">
-              <h2 className="text-2xl font-bold text-text-main-light dark:text-text-main-dark">Add New Task</h2>
-              <p className="text-sm text-text-sub-light dark:text-text-sub-dark mt-1">Create a new task for the team to estimate</p>
-            </div>
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-semibold text-text-main-light dark:text-text-main-dark mb-2">
-                  Task Title <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={newTaskTitle}
-                  onChange={(e) => setNewTaskTitle(e.target.value)}
-                  placeholder="e.g., Implement user authentication"
-                  className="w-full px-4 py-3 rounded-lg border border-border-light dark:border-border-dark bg-background-light dark:bg-background-dark text-text-main-light dark:text-text-main-dark focus:outline-none focus:ring-2 focus:ring-primary"
-                  autoFocus
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !e.shiftKey) {
-                      e.preventDefault();
-                      handleAddTask();
-                    } else if (e.key === 'Escape') {
-                      setShowTaskModal(false);
-                      setNewTaskTitle('');
-                      setNewTaskDescription('');
-                    }
-                  }}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-text-main-light dark:text-text-main-dark mb-2">
-                  Description <span className="text-text-sub-light text-xs">(Optional)</span>
-                </label>
-                <textarea
-                  value={newTaskDescription}
-                  onChange={(e) => setNewTaskDescription(e.target.value)}
-                  placeholder="Add any additional context or requirements..."
-                  rows={4}
-                  className="w-full px-4 py-3 rounded-lg border border-border-light dark:border-border-dark bg-background-light dark:bg-background-dark text-text-main-light dark:text-text-main-dark focus:outline-none focus:ring-2 focus:ring-primary resize-none"
-                  onKeyDown={(e) => {
-                    if (e.key === 'Escape') {
-                      setShowTaskModal(false);
-                      setNewTaskTitle('');
-                      setNewTaskDescription('');
-                    }
-                  }}
-                />
-              </div>
-            </div>
-            <div className="p-6 border-t border-border-light dark:border-border-dark flex gap-3 justify-end">
-              <button
-                onClick={() => {
-                  setShowTaskModal(false);
-                  setNewTaskTitle('');
-                  setNewTaskDescription('');
-                }}
-                className="px-6 py-2.5 rounded-lg border border-border-light dark:border-border-dark text-text-main-light dark:text-text-main-dark font-medium hover:bg-background-light dark:hover:bg-background-dark transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleAddTask}
-                disabled={!newTaskTitle.trim()}
-                className="px-6 py-2.5 rounded-lg bg-primary text-white font-bold hover:bg-primary-hover shadow-lg shadow-primary/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                Add Task
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {renderTaskModal()}
+      {renderEndSessionModal()}
     </div>
   );
 }
 
+export default function SessionPage() {
+  return (
+    <Suspense fallback={<div className="h-screen w-full flex items-center justify-center bg-background-light dark:bg-background-dark">Loading session params...</div>}>
+      <SessionContent />
+    </Suspense>
+  );
+}

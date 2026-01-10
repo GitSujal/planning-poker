@@ -10,7 +10,9 @@
     "build:worker": "cd worker && npm run build",
     "start": "next start",
     "lint": "next lint",
-    "deploy:worker": "cd worker && npm run deploy"
+    "deploy:worker": "cd worker && npm run deploy",
+    "deploy:frontend": "npm run build && npx wrangler pages deploy ./out",
+    "deploy": "npm run deploy:worker && npm run deploy:frontend"
   },
   "dependencies": {
     "@radix-ui/react-dialog": "^1.1.15",

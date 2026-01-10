@@ -1,9 +1,12 @@
 'use client';
 
+import { useState } from 'react';
 import Link from 'next/link';
 import { ThemeToggle } from '@/components/ThemeToggle';
 
 export default function Home() {
+  const [joinId, setJoinId] = useState('');
+
   return (
     <div className="relative flex min-h-screen w-full flex-col bg-background-light dark:bg-background-dark font-display text-text-main-light dark:text-text-main-dark overflow-x-hidden selection:bg-primary/30">
       <header className="flex items-center justify-between whitespace-nowrap border-b border-solid border-border-light dark:border-border-dark bg-surface-light dark:bg-surface-dark px-6 py-4 md:px-10 sticky top-0 z-50">
@@ -57,8 +60,22 @@ export default function Home() {
                 </div>
                 <div className="w-full max-w-[320px]">
                   <label className="flex w-full items-center rounded-lg border border-border-light dark:border-border-dark bg-surface-light dark:bg-surface-dark focus-within:border-primary focus-within:ring-1 focus-within:ring-primary overflow-hidden h-12 transition-all">
-                    <input className="peer h-full w-full bg-transparent px-4 text-sm text-text-main-light dark:text-text-main-dark placeholder:text-text-sub-light dark:placeholder:text-text-sub-dark focus:outline-none" placeholder="Enter Session ID..." type="text" />
-                    <Link href="/join" className="h-full px-5 bg-background-light dark:bg-background-dark hover:bg-gray-200 dark:hover:bg-gray-700 border-l border-border-light dark:border-border-dark text-text-main-light dark:text-text-main-dark text-sm font-bold transition-colors flex items-center gap-2">
+                    <input 
+                      className="peer h-full w-full bg-transparent px-4 text-sm text-text-main-light dark:text-text-main-dark placeholder:text-text-sub-light dark:placeholder:text-text-sub-dark focus:outline-none" 
+                      placeholder="Enter Session ID..." 
+                      type="text" 
+                      value={joinId}
+                      onChange={(e) => setJoinId(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && joinId.trim()) {
+                          window.location.href = `/join?id=${encodeURIComponent(joinId.trim())}`;
+                        }
+                      }}
+                    />
+                    <Link 
+                      href={joinId.trim() ? `/join?id=${encodeURIComponent(joinId.trim())}` : '/join'} 
+                      className="h-full px-5 bg-background-light dark:bg-background-dark hover:bg-gray-200 dark:hover:bg-gray-700 border-l border-border-light dark:border-border-dark text-text-main-light dark:text-text-main-dark text-sm font-bold transition-colors flex items-center gap-2"
+                    >
                       Join
                       <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
                     </Link>
